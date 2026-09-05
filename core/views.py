@@ -766,7 +766,8 @@ class CategoryListCreateView(APIView):
     """
     GET /api/categories/
     - Return only categories where is_active=True.
-    - Authenticated users can access.
+    - Public endpoint (accessible to callers, listeners, guests, and admins).
+    - Automatically seeds default categories if empty.
 
     POST /api/categories/
     - Admin only.
@@ -775,11 +776,22 @@ class CategoryListCreateView(APIView):
     """
     def get_permissions(self):
         if self.request.method == 'GET':
-            return [permissions.IsAuthenticated()]
+            return [permissions.AllowAny()]
         return [IsAdminUser()]
 
     def get(self, request):
         categories = Category.objects.filter(is_active=True).order_by('id')
+        if not categories.exists():
+            from .management.commands.seed_categories import INITIAL_CATEGORIES
+            for item in INITIAL_CATEGORIES:
+                Category.objects.get_or_create(
+                    name=item["name"],
+                    defaults={
+                        "description": item.get("description", ""),
+                        "is_active": True,
+                    }
+                )
+            categories = Category.objects.filter(is_active=True).order_by('id')
         serializer = CategorySerializer(categories, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
@@ -797,7 +809,7 @@ class CategoryDetailView(APIView):
     GET /api/categories/<id>/
     - Return the category only if is_active=True.
     - If it doesn't exist or is inactive, return HTTP 404.
-    - Authenticated users can access.
+    - Public endpoint for GET.
 
     PUT /api/categories/<id>/
     PATCH /api/categories/<id>/
@@ -811,7 +823,7 @@ class CategoryDetailView(APIView):
     """
     def get_permissions(self):
         if self.request.method == 'GET':
-            return [permissions.IsAuthenticated()]
+            return [permissions.AllowAny()]
         return [IsAdminUser()]
 
     def get(self, request, id):
