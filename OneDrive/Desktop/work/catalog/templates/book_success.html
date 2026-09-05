@@ -1,0 +1,15 @@
+{% extends 'base.html' %}
+
+{% block title %}
+Book Added Successfully
+{% endblock %}
+
+{% block content %}
+
+<h2>Book Added Successfully!</h2>
+
+<p>Your book has been saved successfully.</p>
+
+<a href="{% url 'book_create' %}">Add Another Book</a>
+
+{% endblock %}

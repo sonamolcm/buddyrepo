@@ -1,0 +1,45 @@
+{% extends 'base.html' %}
+
+{% block title %}
+Trash
+{% endblock %}
+
+{% block content %}
+
+<h2>🗑️ Trash</h2>
+
+{% if books %}
+
+    {% for book in books %}
+
+        <div class="book-card">
+
+            <h3>{{ book.title }}</h3>
+
+            <p>Author: {{ book.author }}</p>
+
+            <p>{{ book.description }}</p>
+
+            <p>
+                Deleted:
+                {% if book.is_deleted %}
+                    Yes
+                {% endif %}
+            </p>
+
+            <form method="POST" action="{% url 'book_restore' book.id %}">
+                {% csrf_token %}
+                <button type="submit">Restore</button>
+            </form>
+
+        </div>
+
+    {% endfor %}
+
+{% else %}
+
+    <p>Trash is empty.</p>
+
+{% endif %}
+
+{% endblock %}

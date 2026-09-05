@@ -1,0 +1,84 @@
+{% extends 'base.html' %}
+
+{% block title %}
+Book List
+{% endblock %}
+
+{% block content %}
+
+<h2>📚 Book List</h2>
+
+<a href="{% url 'book_create' %}">
+    <button type="button">➕ Add Book</button>
+</a>
+
+<br><br>
+
+{% if books %}
+
+    {% for book in books %}
+
+        <div class="book-card">
+
+            <h3>{{ book.title }}</h3>
+
+            <p>
+                <strong>Author:</strong>
+                {{ book.author }}
+            </p>
+
+            <p>
+                <strong>Description:</strong>
+                {{ book.description }}
+            </p>
+
+            <p>
+                <strong>Published Date:</strong>
+                {{ book.published_date }}
+            </p>
+
+            <p>
+                <strong>ISBN:</strong>
+                {{ book.isbn }}
+            </p>
+
+            <p>
+                <strong>Available:</strong>
+                {% if book.is_available %}
+                    Yes
+                {% else %}
+                    No
+                {% endif %}
+            </p>
+
+            <br>
+
+            <a href="{% url 'book_update' book.id %}">
+                <button type="button">✏️ Edit</button>
+            </a>
+
+            <form method="POST"
+                  action="{% url 'book_delete' book.id %}"
+                  style="display: inline;">
+
+                {% csrf_token %}
+
+                <button type="submit">
+                    🗑️ Move to Trash
+                </button>
+
+            </form>
+
+        </div>
+
+        <hr>
+
+    {% endfor %}
+
+{% else %}
+
+    <p>No books available.</p>
+
+{% endif %}
+
+{% endblock %}

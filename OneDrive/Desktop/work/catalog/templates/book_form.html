@@ -1,0 +1,106 @@
+{% extends 'base.html' %}
+
+{% block title %}
+Add Book
+{% endblock %}
+
+{% block content %}
+
+<h2>Add New Book</h2>
+
+<form method="POST">
+
+    {% csrf_token %}
+
+    <div class="form-group">
+        <label for="{{ form.title.id_for_label }}">Title:</label>
+        {{ form.title }}
+    </div>
+
+    <div class="form-group">
+        <label for="{{ form.author.id_for_label }}">Author:</label>
+        {{ form.author }}
+    </div>
+
+    <div class="form-group">
+        <label for="{{ form.description.id_for_label }}">Description:</label>
+        {{ form.description }}
+    </div>
+
+    <div class="form-group">
+        <label for="{{ form.published_date.id_for_label }}">Published Date:</label>
+        {{ form.published_date }}
+    </div>
+
+    <div class="form-group">
+        <label for="{{ form.isbn.id_for_label }}">ISBN:</label>
+        {{ form.isbn }}
+    </div>
+
+    <div class="form-group checkbox-group">
+        <label for="{{ form.is_available.id_for_label }}">
+            {{ form.is_available }}
+            Available
+        </label>
+    </div>
+
+    <button type="submit">Save Book</button>
+
+</form>
+
+<style>
+
+    form {
+        max-width: 600px;
+    }
+
+    .form-group {
+        margin-bottom: 18px;
+    }
+
+    .form-group label {
+        display: block;
+        margin-bottom: 7px;
+        font-weight: bold;
+    }
+
+    .form-group input,
+    .form-group textarea,
+
+    .form-group select {
+        width: 100%;
+        padding: 10px;
+        border: 1px solid #a37996;
+        border-radius: 8px;
+        font-size: 15px;
+        font-family: Arial, sans-serif;
+    }
+
+    .form-group textarea {
+        height: 100px;
+        resize: vertical;
+        
+}
+    
+
+    .checkbox-group label {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+
+    .checkbox-group input {
+        width: auto;
+    }
+
+    button {
+        padding: 11px 25px;
+        border: none;
+        border-radius: 8px;
+        cursor: pointer;
+        font-size: 15px;
+    }
+
+</style>
+
+{% endblock %}
