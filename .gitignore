@@ -37,3 +37,7 @@ media/
 .vscode/
 .idea/
 *.swp
+
+# Unwanted folders
+Downloads/
+OneDrive/

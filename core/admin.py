@@ -14,7 +14,7 @@ from .models import (
 
 class ListenerProfileInline(admin.StackedInline):
     model = ListenerProfile
-    can_delete = False
+    can_delete = True
     verbose_name_plural = 'Listener Profile Details'
     fk_name = 'user'
     extra = 0
@@ -23,7 +23,7 @@ class ListenerProfileInline(admin.StackedInline):
 
 class CallerProfileInline(admin.StackedInline):
     model = CallerProfile
-    can_delete = False
+    can_delete = True
     verbose_name_plural = 'Caller Profile Details'
     fk_name = 'user'
     extra = 0
@@ -31,8 +31,8 @@ class CallerProfileInline(admin.StackedInline):
 
 @admin.register(User)
 class UserAdmin(BaseUserAdmin):
-    list_display = ('username', 'phone_number', 'role', 'is_verified', 'is_active', 'created_at')
-    list_filter = ('role', 'is_verified', 'is_active', 'is_staff')
+    list_display = ('username', 'phone_number', 'role', 'is_staff', 'is_superuser', 'is_verified', 'is_active', 'created_at')
+    list_filter = ('role', 'is_staff', 'is_superuser', 'is_verified', 'is_active')
     search_fields = ('username', 'phone_number', 'first_name', 'email')
     inlines = (ListenerProfileInline, CallerProfileInline)
     fieldsets = BaseUserAdmin.fieldsets + (
@@ -41,7 +41,30 @@ class UserAdmin(BaseUserAdmin):
     add_fieldsets = BaseUserAdmin.add_fieldsets + (
         ('Buddy Roles & Phone', {'fields': ('role', 'phone_number', 'is_verified', 'profile_picture')}),
     )
-    actions = ['activate_users', 'deactivate_users']
+    actions = ['activate_users', 'deactivate_users', 'make_admin', 'make_listener', 'make_caller']
+
+    def get_inlines(self, request, obj=None):
+        if obj is None:
+            return ()
+        if obj.role == 'ADMIN':
+            inlines = []
+            if hasattr(obj, 'caller_profile'):
+                inlines.append(CallerProfileInline)
+            if hasattr(obj, 'listener_profile'):
+                inlines.append(ListenerProfileInline)
+            return tuple(inlines)
+        if obj.is_listener:
+            return (ListenerProfileInline,)
+        if obj.is_caller:
+            return (CallerProfileInline,)
+        return super().get_inlines(request, obj)
+
+    def save_model(self, request, form, change):
+        if form.instance.is_superuser and form.instance.role in ('CALLER', 'USER'):
+            form.instance.role = 'ADMIN'
+        super().save_model(request, form, change)
+        if form.instance.role == 'ADMIN' and hasattr(form.instance, 'caller_profile'):
+            form.instance.caller_profile.delete()
 
     @admin.action(description='Activate selected accounts')
     def activate_users(self, request, queryset):
@@ -50,6 +73,30 @@ class UserAdmin(BaseUserAdmin):
     @admin.action(description='Deactivate / Ban selected accounts')
     def deactivate_users(self, request, queryset):
         queryset.update(is_active=False)
+
+    @admin.action(description='Set selected users role to ADMIN')
+    def make_admin(self, request, queryset):
+        for user in queryset:
+            user.role = 'ADMIN'
+            user.is_staff = True
+            user.save()
+            if hasattr(user, 'caller_profile'):
+                user.caller_profile.delete()
+        self.message_user(request, f"{queryset.count()} user(s) successfully updated to ADMIN.")
+
+    @admin.action(description='Set selected users role to LISTENER')
+    def make_listener(self, request, queryset):
+        for user in queryset:
+            user.role = 'LISTENER'
+            user.save()
+            if hasattr(user, 'caller_profile'):
+                user.caller_profile.delete()
+        self.message_user(request, f"{queryset.count()} user(s) successfully updated to LISTENER.")
+
+    @admin.action(description='Set selected users role to CALLER')
+    def make_caller(self, request, queryset):
+        queryset.update(role='CALLER')
+        self.message_user(request, f"{queryset.count()} user(s) successfully updated to CALLER.")
 
 
 @admin.register(CallerProfile)
@@ -66,6 +113,12 @@ class ListenerProfileAdmin(admin.ModelAdmin):
     search_fields = ('listener_id', 'user__username')
     list_editable = ('is_available',)
     fields = ('user', 'listener_id', 'language', 'is_available')
+
+    def save_model(self, request, form, change):
+        super().save_model(request, form, change)
+        if form.instance.user and form.instance.user.role != 'LISTENER':
+            form.instance.user.role = 'LISTENER'
+            form.instance.user.save(update_fields=['role'])
 
     def get_username(self, obj):
         return obj.user.username

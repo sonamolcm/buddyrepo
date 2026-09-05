@@ -2,7 +2,7 @@
 # pyrefly: ignore [missing-import]
 from django.db import models
 # pyrefly: ignore [missing-import]
-from django.contrib.auth.models import AbstractUser
+from django.contrib.auth.models import AbstractUser, UserManager as DjangoUserManager
 # pyrefly: ignore [missing-import]
 from django.db.models.signals import post_save
 # pyrefly: ignore [missing-import]
@@ -27,6 +27,35 @@ class PhoneOTP(models.Model):
 
     def __str__(self):
         return f"{self.phone_number} -> {self.otp}"
+
+
+class UserManager(DjangoUserManager):
+    """
+    Custom user manager for Buddy User model.
+    Ensures superusers created via `createsuperuser` automatically receive:
+      - role = 'ADMIN'
+      - is_staff = True
+      - is_superuser = True
+    And normal users default to role = 'CALLER' unless explicitly specified.
+    """
+
+    def create_user(self, username, email=None, password=None, **extra_fields):
+        extra_fields.setdefault('role', 'CALLER')
+        return super().create_user(username, email=email, password=password, **extra_fields)
+
+    def create_superuser(self, username, email=None, password=None, **extra_fields):
+        extra_fields.setdefault('is_staff', True)
+        extra_fields.setdefault('is_superuser', True)
+        extra_fields.setdefault('role', 'ADMIN')
+
+        if extra_fields.get('is_staff') is not True:
+            raise ValueError('Superuser must have is_staff=True.')
+        if extra_fields.get('is_superuser') is not True:
+            raise ValueError('Superuser must have is_superuser=True.')
+        if extra_fields.get('role') != 'ADMIN':
+            raise ValueError('Superuser must have role="ADMIN".')
+
+        return super().create_superuser(username, email=email, password=password, **extra_fields)
 
 
 class User(AbstractUser):
@@ -66,6 +95,15 @@ class User(AbstractUser):
     is_profile_completed = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    objects = UserManager()
+
+    def save(self, *args, **kwargs):
+        if self.is_superuser:
+            self.is_staff = True
+            if self.role in ('CALLER', 'USER'):
+                self.role = 'ADMIN'
+        super().save(*args, **kwargs)
 
     @property
     def is_caller(self):
