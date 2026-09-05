@@ -1,0 +1,529 @@
+{
+  "info": {
+    "_postman_id": "b8a92026-buddy-api-complete-suite",
+    "name": "Buddy App API",
+    "description": "Complete, production-ready Postman collection for the Buddy mobile backend (Caller Signup, Caller Login, Listener Login, Profile, and Token Refresh).",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://127.0.0.1:8000/api",
+      "type": "string"
+    },
+    {
+      "key": "localBaseUrl",
+      "value": "http://127.0.0.1:8000/api",
+      "type": "string"
+    },
+    {
+      "key": "pythonAnywhereUrl",
+      "value": "https://buddy2026.pythonanywhere.com/api",
+      "type": "string"
+    },
+    {
+      "key": "token",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "refreshToken",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "signupPhone",
+      "value": "+919876543299",
+      "type": "string"
+    },
+    {
+      "key": "signupOtp",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "verificationToken",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "loginOtp",
+      "value": "",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "1. Authentication",
+      "item": [
+        {
+          "name": "Caller Signup - Step 1: Send OTP",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "var jsonData = pm.response.json();",
+                  "if (jsonData.data && jsonData.data.otp) {",
+                  "    pm.collectionVariables.set(\"signupOtp\", jsonData.data.otp);",
+                  "    console.log(\"Captured Signup OTP: \" + jsonData.data.otp);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"phone_number\": \"{{signupPhone}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/caller/signup/send-otp/",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "caller", "signup", "send-otp", ""]
+            }
+          }
+        },
+        {
+          "name": "Caller Signup - Step 1: Duplicate Phone Rejection (409)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"phone_number\": \"{{signupPhone}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/caller/signup/send-otp/",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "caller", "signup", "send-otp", ""]
+            }
+          }
+        },
+        {
+          "name": "Caller Signup - Step 2: Verify OTP",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "var jsonData = pm.response.json();",
+                  "if (jsonData.data && jsonData.data.verification_token) {",
+                  "    pm.collectionVariables.set(\"verificationToken\", jsonData.data.verification_token);",
+                  "    console.log(\"Captured Verification Token: \" + jsonData.data.verification_token);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"phone_number\": \"{{signupPhone}}\",\n  \"otp\": \"{{signupOtp}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/caller/signup/verify-otp/",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "caller", "signup", "verify-otp", ""]
+            }
+          }
+        },
+        {
+          "name": "Caller Signup - Step 3: Complete Profile & Activate",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "var jsonData = pm.response.json();",
+                  "var tokens = (jsonData.data && jsonData.data.tokens) ? jsonData.data.tokens : (jsonData.tokens || {});",
+                  "if (tokens.access) {",
+                  "    pm.collectionVariables.set(\"token\", tokens.access);",
+                  "    pm.collectionVariables.set(\"refreshToken\", tokens.refresh);",
+                  "    console.log(\"Saved Caller JWT access token: \" + tokens.access);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"verification_token\": \"{{verificationToken}}\",\n  \"name\": \"Anu\",\n  \"age\": 24,\n  \"gender\": \"Female\",\n  \"language\": \"Malayalam\",\n  \"interests\": [\"Music\", \"Movies\", \"Travel\"]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/caller/signup/complete-profile/",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "caller", "signup", "complete-profile", ""]
+            }
+          }
+        },
+        {
+          "name": "Caller Login - Step 1: Send OTP",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "var jsonData = pm.response.json();",
+                  "if (jsonData.data && jsonData.data.otp) {",
+                  "    pm.collectionVariables.set(\"loginOtp\", jsonData.data.otp);",
+                  "    console.log(\"Captured Login OTP: \" + jsonData.data.otp);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"phone_number\": \"{{signupPhone}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/caller/login/send-otp/",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "caller", "login", "send-otp", ""]
+            }
+          }
+        },
+        {
+          "name": "Caller Login - Step 1: Unregistered Phone (404)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"phone_number\": \"+910000000000\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/caller/login/send-otp/",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "caller", "login", "send-otp", ""]
+            }
+          }
+        },
+        {
+          "name": "Caller Login - Step 2: Verify OTP & Obtain Tokens",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "var jsonData = pm.response.json();",
+                  "var tokens = (jsonData.data && jsonData.data.tokens) ? jsonData.data.tokens : (jsonData.tokens || {});",
+                  "if (tokens.access) {",
+                  "    pm.collectionVariables.set(\"token\", tokens.access);",
+                  "    pm.collectionVariables.set(\"refreshToken\", tokens.refresh);",
+                  "    console.log(\"Login successful! Saved access token: \" + tokens.access);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"phone_number\": \"{{signupPhone}}\",\n  \"otp\": \"{{loginOtp}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/caller/login/verify-otp/",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "caller", "login", "verify-otp", ""]
+            }
+          }
+        },
+        {
+          "name": "Admin - Create Listener Account (Username & Password)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"LISTENER_001\",\n  \"password\": \"ListenerPass123!\",\n  \"language\": \"English\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/admin/listeners/create/",
+              "host": ["{{baseUrl}}"],
+              "path": ["admin", "listeners", "create", ""]
+            }
+          }
+        },
+        {
+          "name": "Admin - List All Listeners",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/admin/listeners/",
+              "host": ["{{baseUrl}}"],
+              "path": ["admin", "listeners", ""]
+            }
+          }
+        },
+        {
+          "name": "Listener Login (Listener ID + Password)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "var jsonData = pm.response.json();",
+                  "var tokens = (jsonData.data && jsonData.data.tokens) ? jsonData.data.tokens : (jsonData.tokens || {});",
+                  "if (tokens.access) {",
+                  "    pm.collectionVariables.set(\"token\", tokens.access);",
+                  "    pm.collectionVariables.set(\"refreshToken\", tokens.refresh);",
+                  "    console.log(\"Listener Login success! Saved access token: \" + tokens.access);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"LISTENER_001\",\n  \"password\": \"ListenerPass123!\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/listener/login/",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "listener", "login", ""]
+            }
+          }
+        },
+        {
+          "name": "Listener Login - Invalid Credentials (401)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"listener_id\": \"LST1001\",\n  \"password\": \"WrongPassword!\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/listener/login/",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "listener", "login", ""]
+            }
+          }
+        },
+        {
+          "name": "Refresh Token",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "var jsonData = pm.response.json();",
+                  "if (jsonData.access) {",
+                  "    pm.collectionVariables.set(\"token\", jsonData.access);",
+                  "    console.log(\"Token Refreshed! Saved new access token: \" + jsonData.access);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refresh\": \"{{refreshToken}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/token/refresh/",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "token", "refresh", ""]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "2. Caller Profile",
+      "item": [
+        {
+          "name": "Get My Profile",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/profile/",
+              "host": ["{{baseUrl}}"],
+              "path": ["profile", ""]
+            }
+          }
+        },
+        {
+          "name": "Update My Profile (PATCH)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Anu Radhakrishnan\",\n  \"age\": 25,\n  \"language\": \"Malayalam, English\",\n  \"interests\": [\"Music\", \"Movies\", \"Travel\", \"Podcasts\"]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/profile/",
+              "host": ["{{baseUrl}}"],
+              "path": ["profile", ""]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "3. Metadata (Dropdowns)",
+      "item": [
+        {
+          "name": "Get World Languages Dropdown",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/languages/",
+              "host": ["{{baseUrl}}"],
+              "path": ["languages", ""]
+            }
+          }
+        },
+        {
+          "name": "Get Interests List (with Emojis)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/interests/",
+              "host": ["{{baseUrl}}"],
+              "path": ["interests", ""]
+            }
+          }
+        },
+        {
+          "name": "Categories - List All Active (Authenticated)",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/categories/",
+              "host": ["{{baseUrl}}"],
+              "path": ["categories", ""]
+            }
+          }
+        },
+        {
+          "name": "Categories - Get One by ID (Authenticated)",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/categories/1/",
+              "host": ["{{baseUrl}}"],
+              "path": ["categories", "1", ""]
+            }
+          }
+        },
+        {
+          "name": "Categories - Create Category (ADMIN Only)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Architect\",\n  \"description\": \"Building designer, planner, and architect\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/categories/",
+              "host": ["{{baseUrl}}"],
+              "path": ["categories", ""]
+            }
+          }
+        },
+        {
+          "name": "Categories - Update Category PUT/PATCH (ADMIN Only)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"description\": \"Senior educator and professor\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/categories/1/",
+              "host": ["{{baseUrl}}"],
+              "path": ["categories", "1", ""]
+            }
+          }
+        },
+        {
+          "name": "Categories - Soft Delete Category (ADMIN Only)",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/categories/1/",
+              "host": ["{{baseUrl}}"],
+              "path": ["categories", "1", ""]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}
