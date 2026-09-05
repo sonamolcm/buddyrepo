@@ -9,65 +9,105 @@ from django.db import migrations, models
 def ensure_tables_and_indexes(apps, schema_editor):
     connection = schema_editor.connection
     with connection.cursor() as cursor:
-        cursor.execute("SHOW TABLES")
-        tables = [row[0].lower() for row in cursor.fetchall()]
+        tables = [t.lower() for t in connection.introspection.table_names(cursor)]
 
         # 1. Ensure core_buddyprofile exists
         if 'buddies_buddyprofile' in tables and 'core_buddyprofile' not in tables:
-            cursor.execute("RENAME TABLE `buddies_buddyprofile` TO `core_buddyprofile`")
+            schema_editor.execute("ALTER TABLE `buddies_buddyprofile` RENAME TO `core_buddyprofile`")
+            tables.append('core_buddyprofile')
         elif 'buddie_buddyprofile' in tables and 'core_buddyprofile' not in tables:
-            cursor.execute("RENAME TABLE `buddie_buddyprofile` TO `core_buddyprofile`")
+            schema_editor.execute("ALTER TABLE `buddie_buddyprofile` RENAME TO `core_buddyprofile`")
+            tables.append('core_buddyprofile')
         elif 'core_buddyprofile' not in tables:
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS `core_buddyprofile` (
-                    `id` bigint NOT NULL AUTO_INCREMENT,
-                    `bio` longtext NOT NULL,
-                    `languages` varchar(200) NOT NULL,
-                    `rate_per_minute` int unsigned NOT NULL,
-                    `rating` decimal(3,2) NOT NULL,
-                    `total_calls` int unsigned NOT NULL,
-                    `is_online` tinyint(1) NOT NULL,
-                    `is_busy` tinyint(1) NOT NULL,
-                    `is_verified` tinyint(1) NOT NULL,
-                    `profession_id` bigint DEFAULT NULL,
-                    `user_id` bigint NOT NULL,
-                    PRIMARY KEY (`id`),
-                    UNIQUE KEY `user_id` (`user_id`)
-                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-            """)
+            try:
+                BuddyProfile = apps.get_model('core', 'BuddyProfile')
+                schema_editor.create_model(BuddyProfile)
+            except Exception:
+                schema_editor.execute("""
+                    CREATE TABLE IF NOT EXISTS `core_buddyprofile` (
+                        `id` integer PRIMARY KEY AUTOINCREMENT,
+                        `bio` text NOT NULL,
+                        `languages` varchar(200) NOT NULL,
+                        `rate_per_minute` integer unsigned NOT NULL,
+                        `rating` decimal(3,2) NOT NULL,
+                        `total_calls` integer unsigned NOT NULL,
+                        `is_online` bool NOT NULL,
+                        `is_busy` bool NOT NULL,
+                        `is_verified` bool NOT NULL,
+                        `profession_id` bigint DEFAULT NULL,
+                        `user_id` bigint NOT NULL UNIQUE
+                    )
+                """ if connection.vendor == 'sqlite' else """
+                    CREATE TABLE IF NOT EXISTS `core_buddyprofile` (
+                        `id` bigint NOT NULL AUTO_INCREMENT,
+                        `bio` longtext NOT NULL,
+                        `languages` varchar(200) NOT NULL,
+                        `rate_per_minute` int unsigned NOT NULL,
+                        `rating` decimal(3,2) NOT NULL,
+                        `total_calls` int unsigned NOT NULL,
+                        `is_online` tinyint(1) NOT NULL,
+                        `is_busy` tinyint(1) NOT NULL,
+                        `is_verified` tinyint(1) NOT NULL,
+                        `profession_id` bigint DEFAULT NULL,
+                        `user_id` bigint NOT NULL,
+                        PRIMARY KEY (`id`),
+                        UNIQUE KEY `user_id` (`user_id`)
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """)
+            tables.append('core_buddyprofile')
 
         # 2. Ensure core_profession exists so DeleteModel can drop it cleanly
         if 'buddies_profession' in tables and 'core_profession' not in tables:
-            cursor.execute("RENAME TABLE `buddies_profession` TO `core_profession`")
+            schema_editor.execute("ALTER TABLE `buddies_profession` RENAME TO `core_profession`")
+            tables.append('core_profession')
         elif 'buddie_profession' in tables and 'core_profession' not in tables:
-            cursor.execute("RENAME TABLE `buddie_profession` TO `core_profession`")
+            schema_editor.execute("ALTER TABLE `buddie_profession` RENAME TO `core_profession`")
+            tables.append('core_profession')
         elif 'core_profession' not in tables:
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS `core_profession` (
-                    `id` bigint NOT NULL AUTO_INCREMENT,
-                    `name` varchar(100) NOT NULL,
-                    `icon` varchar(100) DEFAULT NULL,
-                    `description` longtext NOT NULL,
-                    `is_active` tinyint(1) NOT NULL,
-                    `created_at` datetime(6) NOT NULL,
-                    PRIMARY KEY (`id`)
-                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-            """)
+            try:
+                Profession = apps.get_model('core', 'Profession')
+                schema_editor.create_model(Profession)
+            except Exception:
+                schema_editor.execute("""
+                    CREATE TABLE IF NOT EXISTS `core_profession` (
+                        `id` integer PRIMARY KEY AUTOINCREMENT,
+                        `name` varchar(100) NOT NULL,
+                        `icon` varchar(100) DEFAULT NULL,
+                        `description` text NOT NULL,
+                        `is_active` bool NOT NULL,
+                        `created_at` datetime NOT NULL
+                    )
+                """ if connection.vendor == 'sqlite' else """
+                    CREATE TABLE IF NOT EXISTS `core_profession` (
+                        `id` bigint NOT NULL AUTO_INCREMENT,
+                        `name` varchar(100) NOT NULL,
+                        `icon` varchar(100) DEFAULT NULL,
+                        `description` longtext NOT NULL,
+                        `is_active` tinyint(1) NOT NULL,
+                        `created_at` datetime(6) NOT NULL,
+                        PRIMARY KEY (`id`)
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """)
+            tables.append('core_profession')
 
         # 3. For OTPVerification index, ensure old index exists so RenameIndex finds it
-        cursor.execute("SHOW TABLES")
-        updated_tables = [row[0].lower() for row in cursor.fetchall()]
-        if 'core_otpverification' in updated_tables:
-            cursor.execute("SHOW INDEX FROM `core_otpverification`")
-            indexes = [row[2] for row in cursor.fetchall()]
-            if 'buddie_otpv_phone_n_09d9c8_idx' not in indexes and 'core_otpver_phone_n_10ca4e_idx' in indexes:
+        if 'core_otpverification' in tables:
+            constraints = connection.introspection.get_constraints(cursor, 'core_otpverification')
+            if 'buddie_otpv_phone_n_09d9c8_idx' not in constraints and 'core_otpver_phone_n_10ca4e_idx' in constraints:
+                if connection.vendor == 'mysql':
+                    try:
+                        cursor.execute("ALTER TABLE `core_otpverification` RENAME INDEX `core_otpver_phone_n_10ca4e_idx` TO `buddie_otpv_phone_n_09d9c8_idx`")
+                    except Exception:
+                        pass
+                else:
+                    try:
+                        schema_editor.execute("DROP INDEX IF EXISTS `core_otpver_phone_n_10ca4e_idx`")
+                        schema_editor.execute("CREATE INDEX IF NOT EXISTS `buddie_otpv_phone_n_09d9c8_idx` ON `core_otpverification` (`phone_number`, `purpose`)")
+                    except Exception:
+                        pass
+            elif 'buddie_otpv_phone_n_09d9c8_idx' not in constraints and 'core_otpver_phone_n_10ca4e_idx' not in constraints:
                 try:
-                    cursor.execute("ALTER TABLE `core_otpverification` RENAME INDEX `core_otpver_phone_n_10ca4e_idx` TO `buddie_otpv_phone_n_09d9c8_idx`")
-                except Exception:
-                    pass
-            elif 'buddie_otpv_phone_n_09d9c8_idx' not in indexes and 'core_otpver_phone_n_10ca4e_idx' not in indexes:
-                try:
-                    cursor.execute("ALTER TABLE `core_otpverification` ADD INDEX `buddie_otpv_phone_n_09d9c8_idx` (`phone_number`, `purpose`)")
+                    schema_editor.execute("CREATE INDEX IF NOT EXISTS `buddie_otpv_phone_n_09d9c8_idx` ON `core_otpverification` (`phone_number`, `purpose`)")
                 except Exception:
                     pass
 
