@@ -9,7 +9,19 @@ from .models import (
     ListenerProfile,
     OTPVerification,
     Category,
+    Interest,
+    PhoneOTP,
+    Wallet,
+    WalletTransaction,
+    Call,
+    CallReview,
+    Notification,
 )
+
+# Admin Site Header Branding
+admin.site.site_header = "Buddy Administration Portal"
+admin.site.site_title = "Buddy Admin"
+admin.site.index_title = "Platform & User Management Dashboard"
 
 
 class ListenerProfileInline(admin.StackedInline):
@@ -152,3 +164,50 @@ class CategoryAdmin(admin.ModelAdmin):
     list_filter = ('is_active',)
     search_fields = ('name', 'description')
     list_editable = ('is_active',)
+
+
+@admin.register(Interest)
+class InterestAdmin(admin.ModelAdmin):
+    list_display = ('id', 'name', 'icon')
+    search_fields = ('name',)
+
+
+@admin.register(PhoneOTP)
+class PhoneOTPAdmin(admin.ModelAdmin):
+    list_display = ('phone_number', 'otp', 'created_at')
+    search_fields = ('phone_number',)
+
+
+@admin.register(Wallet)
+class WalletAdmin(admin.ModelAdmin):
+    list_display = ('user', 'balance', 'updated_at')
+    search_fields = ('user__username', 'user__phone_number')
+    list_filter = ('updated_at',)
+
+
+@admin.register(WalletTransaction)
+class WalletTransactionAdmin(admin.ModelAdmin):
+    list_display = ('id', 'wallet', 'transaction_type', 'amount', 'description', 'created_at')
+    list_filter = ('transaction_type', 'created_at')
+    search_fields = ('wallet__user__username', 'description')
+
+
+@admin.register(Call)
+class CallAdmin(admin.ModelAdmin):
+    list_display = ('id', 'caller', 'receiver', 'call_type', 'status', 'duration_seconds', 'coins_deducted', 'created_at')
+    list_filter = ('call_type', 'status', 'created_at')
+    search_fields = ('caller__username', 'receiver__username', 'channel_name')
+
+
+@admin.register(CallReview)
+class CallReviewAdmin(admin.ModelAdmin):
+    list_display = ('id', 'call', 'rating', 'feedback', 'created_at')
+    list_filter = ('rating', 'created_at')
+    search_fields = ('call__caller__username', 'call__receiver__username', 'feedback')
+
+
+@admin.register(Notification)
+class NotificationAdmin(admin.ModelAdmin):
+    list_display = ('id', 'user', 'title', 'notification_type', 'is_read', 'created_at')
+    list_filter = ('notification_type', 'is_read', 'created_at')
+    search_fields = ('user__username', 'title', 'message')

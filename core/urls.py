@@ -11,6 +11,7 @@ from .views import (  # type: ignore
     CallerSignupVerifyOTPView,
     CallerSignupCompleteProfileView,
     # Caller Login Flow
+    CallerLoginView,
     CallerLoginSendOTPView,
     CallerLoginVerifyOTPView,
     # Listener Login Flow
@@ -71,8 +72,18 @@ urlpatterns = [
     # ==========================================
     # 2. CALLER LOGIN & LOGOUT FLOW
     # ==========================================
+    path('auth/caller/login/', CallerLoginView.as_view(), name='caller-login'),
+    path('auth/caller/login', CallerLoginView.as_view(), name='caller-login-noslash'),
+    path('caller/login/', CallerLoginView.as_view(), name='caller-login-short'),
+    path('caller/login', CallerLoginView.as_view(), name='caller-login-short-noslash'),
     path('auth/caller/login/send-otp/', CallerLoginSendOTPView.as_view(), name='caller-login-send-otp'),
+    path('auth/caller/login/send-otp', CallerLoginSendOTPView.as_view()),
+    path('caller/login/send-otp/', CallerLoginSendOTPView.as_view()),
+    path('caller/login/send-otp', CallerLoginSendOTPView.as_view()),
     path('auth/caller/login/verify-otp/', CallerLoginVerifyOTPView.as_view(), name='caller-login-verify-otp'),
+    path('auth/caller/login/verify-otp', CallerLoginVerifyOTPView.as_view()),
+    path('caller/login/verify-otp/', CallerLoginVerifyOTPView.as_view()),
+    path('caller/login/verify-otp', CallerLoginVerifyOTPView.as_view()),
     path('auth/caller/logout/', CallerLogoutView.as_view(), name='caller-logout'),
     path('auth/caller/logout', CallerLogoutView.as_view(), name='caller-logout-noslash'),
     path('caller/logout/', CallerLogoutView.as_view(), name='caller-logout-short'),

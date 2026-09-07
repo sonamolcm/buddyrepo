@@ -284,6 +284,22 @@ class CallerLoginSendOTPView(APIView):
 
         # Check whether phone number belongs to a registered Caller
         user = User.objects.filter(phone_number=phone_number).first()
+        if user is None and getattr(settings, 'DEBUG', False):
+            # Auto-provision test caller in dev so test numbers always work
+            user = User.objects.create_user(
+                username=phone_number,
+                phone_number=phone_number,
+                role='CALLER',
+                first_name='Test Caller',
+                is_verified=True,
+                is_active=True,
+                is_profile_completed=True
+            )
+            CallerProfile.objects.get_or_create(
+                user=user,
+                defaults={'name': 'Test Caller', 'language': 'English'}
+            )
+
         if user is None or not getattr(user, 'is_caller', False):
             return Response({
                 "success": False,
@@ -339,6 +355,21 @@ class CallerLoginVerifyOTPView(APIView):
             }, status=status.HTTP_400_BAD_REQUEST)
 
         user = User.objects.filter(phone_number=phone_number).first()
+        if user is None and getattr(settings, 'DEBUG', False):
+            user = User.objects.create_user(
+                username=phone_number,
+                phone_number=phone_number,
+                role='CALLER',
+                first_name='Test Caller',
+                is_verified=True,
+                is_active=True,
+                is_profile_completed=True
+            )
+            CallerProfile.objects.get_or_create(
+                user=user,
+                defaults={'name': 'Test Caller', 'language': 'English'}
+            )
+
         if user is None or not getattr(user, 'is_caller', False):
             return Response({
                 "success": False,
@@ -384,6 +415,113 @@ class CallerLoginVerifyOTPView(APIView):
                 }
             }
         }, status=status.HTTP_200_OK)
+
+
+class CallerLoginView(APIView):
+    """
+    Unified Caller Login API:
+    Accessible at:
+    - /api/auth/caller/login/
+    - /api/caller/login/
+
+    Behaviors:
+    1. GET: Returns helper info, registered test callers, and sample payloads.
+    2. POST with {"phone_number": "..."}: Sends Login OTP.
+    3. POST with {"phone_number": "...", "otp": "..."}: Verifies OTP & authenticates.
+    4. POST with {"phone_number": "...", "password": "..."}: Password authentication.
+    """
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request):
+        sample_callers = list(User.objects.filter(role__in=['CALLER', 'USER']).exclude(phone_number__isnull=True).exclude(phone_number='').values_list('phone_number', flat=True)[:5])
+        return Response({
+            "success": True,
+            "message": "Caller Login API is active. Supports both Phone OTP login and Password login.",
+            "endpoints": {
+                "direct_login": "/api/auth/caller/login/",
+                "send_otp": "/api/auth/caller/login/send-otp/",
+                "verify_otp": "/api/auth/caller/login/verify-otp/"
+            },
+            "usage": {
+                "step_1_send_otp": {
+                    "description": "Send phone number to receive a 6-digit OTP",
+                    "payload": {"phone_number": sample_callers[0] if sample_callers else "+919876543299"}
+                },
+                "step_2_verify_otp": {
+                    "description": "Send phone number + 6-digit OTP to log in",
+                    "payload": {"phone_number": sample_callers[0] if sample_callers else "+919876543299", "otp": "123456"}
+                },
+                "password_login": {
+                    "description": "Optional: Log in directly with password",
+                    "payload": {"phone_number": sample_callers[0] if sample_callers else "+919876543299", "password": "YourPassword"}
+                }
+            },
+            "registered_test_callers": sample_callers
+        }, status=status.HTTP_200_OK)
+
+    def post(self, request):
+        data = request.data
+        phone = (data.get('phone_number') or data.get('username') or '').strip()
+        otp = (data.get('otp') or '').strip()
+        password = data.get('password')
+
+        if not phone:
+            return Response({
+                "success": False,
+                "message": "phone_number is required."
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        # 1. If OTP is provided -> Verify OTP and login
+        if otp:
+            return CallerLoginVerifyOTPView().post(request)
+
+        # 2. If Password is provided -> Password login
+        if password:
+            user = User.objects.filter(phone_number=phone).first()
+            if not user:
+                user = User.objects.filter(username=phone).first()
+            if not user or not user.check_password(password):
+                return Response({
+                    "success": False,
+                    "message": "Invalid phone number or password."
+                }, status=status.HTTP_401_UNAUTHORIZED)
+            if not getattr(user, 'is_caller', False):
+                return Response({
+                    "success": False,
+                    "message": "This account is not a caller account."
+                }, status=status.HTTP_403_FORBIDDEN)
+            if not user.is_active:
+                return Response({
+                    "success": False,
+                    "message": "This account has been deactivated."
+                }, status=status.HTTP_403_FORBIDDEN)
+
+            cp, _ = CallerProfile.objects.get_or_create(user=user)
+            CallerProfile.objects.filter(user=user).update(is_online=True)
+            refresh = RefreshToken.for_user(user)
+            return Response({
+                "success": True,
+                "message": "Login successful",
+                "data": {
+                    "user": {
+                        "id": user.id,
+                        "role": "CALLER",
+                        "phone_number": user.phone_number,
+                        "name": cp.name or user.first_name or user.username,
+                        "age": cp.age,
+                        "gender": cp.gender,
+                        "language": cp.language,
+                        "interests": cp.interests
+                    },
+                    "tokens": {
+                        "access": str(refresh.access_token),
+                        "refresh": str(refresh)
+                    }
+                }
+            }, status=status.HTTP_200_OK)
+
+        # 3. If only phone is provided -> Send Login OTP
+        return CallerLoginSendOTPView().post(request)
 
 
 # ===================================================

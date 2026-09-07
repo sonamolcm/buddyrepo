@@ -25,6 +25,7 @@ from django.conf import settings
 from django.conf.urls.static import static
 
 from core.views import (
+    CallerLoginView,
     ListenerLoginView,
     CallerLogoutView,
     ListenerLogoutView,
@@ -45,9 +46,16 @@ from core.views import (
     PrivacyPolicyView,
     HelplineView,
 )
+from core.caller_views import app_home_view, admin_panel_view
 
 urlpatterns = [
     path('admin/', admin.site.urls),
+    path('panel/', admin_panel_view, name='admin-panel'),
+    path('admin-panel/', admin_panel_view, name='admin-panel-alias'),
+    path('dashboard/', admin_panel_view, name='admin-dashboard'),
+    path('', app_home_view, name='app-home'),
+    path('app/', app_home_view, name='app-simulator'),
+    path('simulator/', app_home_view, name='app-simulator-alias'),
 
     # ==========================================
     # CALLER CRUD ENDPOINTS
@@ -123,6 +131,20 @@ urlpatterns = [
     path('admin/listeners/<str:identifier>/', ListenerDetailView.as_view()),
     path('admin/listeners/<str:identifier>', ListenerDetailView.as_view()),
 
+
+    # Direct Caller Login endpoints (handles all URL variations)
+    path('api/auth/caller/login/', CallerLoginView.as_view(), name='api-auth-caller-login'),
+    path('api/auth/caller/login', CallerLoginView.as_view()),
+    path('auth/caller/login/', CallerLoginView.as_view()),
+    path('auth/caller/login', CallerLoginView.as_view()),
+    path('api/caller/login/', CallerLoginView.as_view()),
+    path('api/caller/login', CallerLoginView.as_view()),
+    path('caller/login/', CallerLoginView.as_view()),
+    path('caller/login', CallerLoginView.as_view()),
+    path('api/api/auth/caller/login/', CallerLoginView.as_view()),
+    path('api/api/auth/caller/login', CallerLoginView.as_view()),
+    path('api/api/caller/login/', CallerLoginView.as_view()),
+    path('api/api/caller/login', CallerLoginView.as_view()),
 
     # Direct Listener & General Login endpoints (handles all URL variations)
     path('api/auth/listener/login/', ListenerLoginView.as_view(), name='api-auth-listener-login'),
