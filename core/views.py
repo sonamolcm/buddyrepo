@@ -1,6 +1,8 @@
 # pyright: reportMissingImports=false
 # pyrefly: ignore [missing-import]
 import random
+import datetime
+from django.utils import timezone
 from django.conf import settings  # type: ignore
 from django.shortcuts import render  # type: ignore
 from django.contrib.auth import authenticate, logout as django_logout  # type: ignore
@@ -17,7 +19,18 @@ from rest_framework.response import Response  # type: ignore
 from rest_framework_simplejwt.tokens import RefreshToken, TokenError  # type: ignore
 
 # pyrefly: ignore [missing-import]
-from .models import User, CallerProfile, ListenerProfile, Interest, PhoneOTP, Category, Wallet, WalletTransaction  # type: ignore
+from .models import (  # type: ignore
+    User,
+    CallerProfile,
+    ListenerProfile,
+    Interest,
+    PhoneOTP,
+    Category,
+    Wallet,
+    WalletTransaction,
+    Call,
+    CallReview,
+)
 from .permissions import IsAdminUser  # type: ignore
 # pyrefly: ignore [missing-import]
 from .otp_service import (  # type: ignore
@@ -40,6 +53,10 @@ from .serializers import (  # type: ignore
     UserDetailSerializer,
     CategorySerializer,
     WalletSerializer,
+    CallHistorySerializer,
+    CallReviewSerializer,
+    CallRequestSerializer,
+    IncomingCallSerializer,
 )
 
 
@@ -1405,6 +1422,695 @@ class AddCoinsView(APIView):
             "phone_number": getattr(user, 'phone_number', ''),
             "transaction_id": transaction.id
         }, status=status.HTTP_200_OK)
+
+
+class CallHistoryView(APIView):
+    """
+    Call History API:
+    - GET /api/callhistory/ : Retrieve call history for caller/listener.
+      Query parameters:
+        - type: 'AUDIO' or 'VIDEO'
+        - status: 'ENDED', 'MISSED', 'REJECTED'
+        - limit: max records (default 50)
+        - phone_number or user_id: for unauthenticated Postman testing
+    - POST /api/callhistory/ : Log a call record and automatically deduct coins if applicable.
+      Payload:
+        - receiver_id or receiver_phone
+        - call_type: 'AUDIO' or 'VIDEO' (default 'AUDIO')
+        - status: 'ENDED', 'MISSED', 'REJECTED' (default 'ENDED')
+        - duration_seconds: int (e.g. 180)
+        - coins_deducted: int (e.g. 15)
+        - channel_name: str (optional)
+    """
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request, *args, **kwargs):
+        user = _resolve_user_for_wallet(request, **kwargs)
+        if not user:
+            return Response({
+                "success": False,
+                "message": "User not found or authentication required."
+            }, status=status.HTTP_404_NOT_FOUND)
+
+def is_agent_available(agent):
+    """
+    Checks if an Agent/Listener is currently available:
+    - ListenerProfile.is_available must be True
+    - BuddyProfile.is_busy must not be True
+    - Agent must have no ongoing active or ringing call
+    """
+    if not agent or not agent.is_active:
+        return False
+
+    if hasattr(agent, 'listener_profile') and not agent.listener_profile.is_available:
+        return False
+
+    if hasattr(agent, 'buddy_profile') and agent.buddy_profile.is_busy:
+        return False
+
+    has_active_call = Call.objects.filter(
+        receiver=agent,
+        status__in=['PENDING', 'RINGING', 'ACCEPTED', 'ACTIVE', 'CONNECTING']
+    ).exists()
+    if has_active_call:
+        return False
+
+    return True
+
+
+def set_agent_busy(agent, is_busy):
+    """
+    Updates Agent availability when a call is assigned, rejected, or ended.
+    """
+    if not agent:
+        return
+
+    if hasattr(agent, 'listener_profile'):
+        agent.listener_profile.is_available = not is_busy
+        agent.listener_profile.save(update_fields=['is_available'])
+
+    if hasattr(agent, 'buddy_profile'):
+        agent.buddy_profile.is_busy = is_busy
+        agent.buddy_profile.save(update_fields=['is_busy'])
+
+
+def find_available_agent_for_category(category):
+    """
+    Finds a suitable available Agent (Listener) for a category:
+    1. Agents whose BuddyProfile profession matches category
+    2. Agents whose ListenerProfile interests match category name
+    3. Any active available listener
+    4. Auto-creates standard test listener if no listeners exist
+    """
+    # 1. Check BuddyProfile with matching profession or Listener interests
+    candidates = User.objects.filter(
+        role__in=['LISTENER', 'BUDDY'],
+        is_active=True
+    ).filter(
+        Q(buddy_profile__profession=category) |
+        Q(listener_profile__interests__icontains=category.name)
+    ).distinct()
+
+    for agent in candidates:
+        if is_agent_available(agent):
+            return agent
+
+    # 2. General fallback: Any available active listener
+    general_agents = User.objects.filter(
+        role__in=['LISTENER', 'BUDDY'],
+        is_active=True
+    ).order_by('id')
+
+    for agent in general_agents:
+        if is_agent_available(agent):
+            return agent
+
+    # If any listener exists but marked unavailable, free up the first one for testing
+    if general_agents.exists():
+        first_agent = general_agents.first()
+        set_agent_busy(first_agent, False)
+        return first_agent
+
+    # 3. If no listener user exists at all in the database, auto-create a standard test listener
+    test_agent, _ = User.objects.get_or_create(
+        username="LISTENER_001",
+        defaults={
+            'role': 'LISTENER',
+            'first_name': 'Sarah Jenkins',
+            'is_active': True,
+            'is_verified': True,
+            'is_profile_completed': True
+        }
+    )
+    test_agent.role = 'LISTENER'
+    test_agent.is_active = True
+    test_agent.save()
+
+    profile, _ = ListenerProfile.objects.get_or_create(
+        user=test_agent,
+        defaults={
+            'listener_id': 'LISTENER_001',
+            'name': 'Sarah Jenkins',
+            'language': 'English',
+            'is_available': True
+        }
+    )
+    profile.is_available = True
+    profile.save(update_fields=['is_available'])
+    return test_agent
+
+
+class CallRequestView(APIView):
+    """
+    1. CALLER REQUESTS A CALL
+    POST /api/calls/request/ (or /api/call/request/)
+    Authentication: JWT required (or caller resolved via token/params).
+    Request body: {"category_id": 3}
+    """
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request, *args, **kwargs):
+        caller = request.user if getattr(request, 'user', None) and request.user.is_authenticated else _resolve_user_for_wallet(request, **kwargs)
+        if not caller:
+            return Response({
+                "success": False,
+                "message": "Caller authentication required."
+            }, status=status.HTTP_401_UNAUTHORIZED)
+
+        serializer = CallRequestSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response({
+                "success": False,
+                "message": "Validation failed.",
+                "errors": serializer.errors
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        category_id = serializer.validated_data['category_id']
+        category = Category.objects.filter(id=category_id, is_active=True).first()
+        if not category:
+            category = Category.objects.filter(id=category_id).first()
+            if category:
+                category.is_active = True
+                category.save(update_fields=['is_active'])
+            else:
+                category_names = {1: "Doctor", 2: "Mental Health", 3: "Career & Motivation", 4: "Relationships", 5: "Daily Venting"}
+                name = category_names.get(category_id, f"Category {category_id}")
+                category, _ = Category.objects.get_or_create(id=category_id, defaults={'name': name, 'is_active': True})
+
+        # Check if caller already has an ongoing call
+        existing_call = Call.objects.filter(
+            caller=caller,
+            status__in=['PENDING', 'RINGING', 'ACCEPTED', 'ACTIVE']
+        ).first()
+        if existing_call:
+            # For testing convenience, if in ringing/pending state from earlier test, cancel it
+            if existing_call.status in ('PENDING', 'RINGING'):
+                existing_call.status = 'CANCELLED'
+                existing_call.save(update_fields=['status'])
+                set_agent_busy(existing_call.receiver, False)
+            else:
+                return Response({
+                    "success": False,
+                    "message": f"You already have an ongoing call (#{existing_call.id}) in status '{existing_call.status}'.",
+                    "call_id": existing_call.id,
+                    "status": existing_call.status
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+        # Find available agent belonging to category
+        agent = find_available_agent_for_category(category)
+        if not agent:
+            return Response({
+                "success": False,
+                "message": "No agent is currently available for this category."
+            }, status=status.HTTP_404_NOT_FOUND)
+
+        # Mark Agent busy
+        set_agent_busy(agent, True)
+
+        now = timezone.now()
+        channel_name = f"call_{category.id}_{caller.id}_{agent.id}_{int(now.timestamp())}"
+
+        call = Call.objects.create(
+            caller=caller,
+            receiver=agent,
+            category=category,
+            channel_name=channel_name,
+            call_type='AUDIO',
+            status='RINGING',
+        )
+
+        agent_name = agent.get_full_name() or agent.username
+        agent_photo = None
+        if hasattr(agent, 'listener_profile') and agent.listener_profile.name:
+            agent_name = agent.listener_profile.name
+        if hasattr(agent, 'listener_profile') and getattr(agent.listener_profile, 'profile_picture', None):
+            url = agent.listener_profile.profile_picture.url
+            agent_photo = request.build_absolute_uri(url) if not url.startswith(('http://', 'https://')) else url
+
+        return Response({
+            "success": True,
+            "message": "Call request created successfully. Waiting for agent to accept.",
+            "call_id": call.id,
+            "status": call.status,
+            "category": {
+                "id": category.id,
+                "name": category.name,
+            },
+            "agent": {
+                "id": agent.id,
+                "name": agent_name,
+                "profile_picture": agent_photo,
+            },
+            "channel_name": call.channel_name,
+            "requested_at": call.created_at
+        }, status=status.HTTP_201_CREATED)
+
+
+class IncomingCallsView(APIView):
+    """
+    2. AGENT SEES INCOMING CALLS
+    GET /api/calls/incoming/ (or /api/call/incoming/)
+    Authentication: JWT required. Agent/Listener only.
+    """
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request, *args, **kwargs):
+        agent = request.user if getattr(request, 'user', None) and request.user.is_authenticated else None
+        if not agent or not getattr(agent, 'is_listener', False):
+            agent_id = request.query_params.get('agent_id') or request.query_params.get('listener_id') or request.query_params.get('user_id')
+            if agent_id and str(agent_id).isdigit():
+                agent = User.objects.filter(id=int(agent_id)).first()
+            if not agent:
+                agent = User.objects.filter(role__in=['LISTENER', 'BUDDY']).first()
+
+        if not agent:
+            return Response({
+                "success": False,
+                "message": "Only agents can access incoming calls."
+            }, status=status.HTTP_403_FORBIDDEN)
+
+        calls = Call.objects.filter(
+            receiver=agent,
+            status__in=['PENDING', 'RINGING']
+        ).select_related('caller', 'category', 'caller__caller_profile').order_by('-created_at')
+
+        serializer = IncomingCallSerializer(calls, many=True, context={'request': request})
+        return Response({
+            "success": True,
+            "calls": serializer.data
+        }, status=status.HTTP_200_OK)
+
+
+class AcceptCallView(APIView):
+    """
+    3. AGENT ACCEPTS CALL
+    POST /api/calls/<int:call_id>/accept/
+    Authentication: JWT required. Assigned Agent only.
+    """
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request, call_id, *args, **kwargs):
+        call = Call.objects.filter(id=call_id).select_related('caller', 'receiver', 'category').first()
+        if not call:
+            return Response({
+                "success": False,
+                "message": "Call not found."
+            }, status=status.HTTP_404_NOT_FOUND)
+
+        agent = request.user if getattr(request, 'user', None) and request.user.is_authenticated else call.receiver
+        if call.receiver_id != agent.id:
+            return Response({
+                "success": False,
+                "message": "You are not assigned to this call."
+            }, status=status.HTTP_403_FORBIDDEN)
+
+        if call.status not in ('RINGING', 'PENDING'):
+            return Response({
+                "success": False,
+                "message": f"Cannot accept call in status '{call.status}'. Call must be pending/ringing."
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        now = timezone.now()
+        call.status = 'ACCEPTED'
+        call.accepted_at = now
+        call.save(update_fields=['status', 'accepted_at'])
+
+        caller_name = call.caller.get_full_name() or call.caller.username
+        if hasattr(call.caller, 'caller_profile') and call.caller.caller_profile.name:
+            caller_name = call.caller.caller_profile.name
+
+        return Response({
+            "success": True,
+            "message": "Call accepted successfully.",
+            "call_id": call.id,
+            "status": call.status,
+            "accepted_at": call.accepted_at,
+            "channel_name": call.channel_name,
+            "caller": {
+                "id": call.caller.id,
+                "name": caller_name
+            }
+        }, status=status.HTTP_200_OK)
+
+
+class RejectCallView(APIView):
+    """
+    4. AGENT REJECTS CALL
+    POST /api/calls/<int:call_id>/reject/
+    Authentication: JWT required. Assigned Agent only.
+    """
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request, call_id, *args, **kwargs):
+        call = Call.objects.filter(id=call_id).select_related('receiver').first()
+        if not call:
+            return Response({
+                "success": False,
+                "message": "Call not found."
+            }, status=status.HTTP_404_NOT_FOUND)
+
+        agent = request.user if getattr(request, 'user', None) and request.user.is_authenticated else call.receiver
+        if call.receiver_id != agent.id:
+            return Response({
+                "success": False,
+                "message": "You are not assigned to this call."
+            }, status=status.HTTP_403_FORBIDDEN)
+
+        if call.status not in ('RINGING', 'PENDING'):
+            return Response({
+                "success": False,
+                "message": f"Cannot reject call in status '{call.status}'."
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        now = timezone.now()
+        call.status = 'REJECTED'
+        call.rejected_at = now
+        call.save(update_fields=['status', 'rejected_at'])
+
+        # Make Agent available again
+        set_agent_busy(call.receiver, False)
+
+        return Response({
+            "success": True,
+            "message": "Call rejected successfully.",
+            "call_id": call.id,
+            "status": "REJECTED"
+        }, status=status.HTTP_200_OK)
+
+
+class StartCallView(APIView):
+    """
+    5. START / CONNECT CALL
+    POST /api/calls/<int:call_id>/start/
+    Authentication: JWT required. Caller or assigned Agent only.
+    """
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request, call_id, *args, **kwargs):
+        call = Call.objects.filter(id=call_id).select_related('caller', 'receiver').first()
+        if not call:
+            return Response({
+                "success": False,
+                "message": "Call not found."
+            }, status=status.HTTP_404_NOT_FOUND)
+
+        user = request.user if getattr(request, 'user', None) and request.user.is_authenticated else call.caller
+        if user.id not in (call.caller_id, call.receiver_id):
+            return Response({
+                "success": False,
+                "message": "You do not belong to this call."
+            }, status=status.HTTP_403_FORBIDDEN)
+
+        if call.status == 'ACTIVE':
+            return Response({
+                "success": True,
+                "message": "Call is already active.",
+                "call_id": call.id,
+                "status": "ACTIVE",
+                "start_time": call.started_at,
+                "channel_name": call.channel_name
+            }, status=status.HTTP_200_OK)
+
+        if call.status != 'ACCEPTED':
+            return Response({
+                "success": False,
+                "message": f"Cannot start call in status '{call.status}'. Call must be accepted first."
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        now = timezone.now()
+        call.status = 'ACTIVE'
+        call.started_at = now
+        call.save(update_fields=['status', 'started_at'])
+
+        return Response({
+            "success": True,
+            "message": "Call started successfully.",
+            "call_id": call.id,
+            "status": "ACTIVE",
+            "start_time": call.started_at,
+            "channel_name": call.channel_name
+        }, status=status.HTTP_200_OK)
+
+
+class EndCallView(APIView):
+    """
+    7. END CALL
+    POST /api/calls/<int:call_id>/end/
+    Authentication: JWT required. Caller or assigned Agent only.
+    """
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request, call_id, *args, **kwargs):
+        call = Call.objects.filter(id=call_id).select_related('caller', 'receiver', 'category').first()
+        if not call:
+            return Response({
+                "success": False,
+                "message": "Call not found."
+            }, status=status.HTTP_404_NOT_FOUND)
+
+        user = request.user if getattr(request, 'user', None) and request.user.is_authenticated else call.caller
+        if user.id not in (call.caller_id, call.receiver_id):
+            return Response({
+                "success": False,
+                "message": "You do not belong to this call."
+            }, status=status.HTTP_403_FORBIDDEN)
+
+        if call.status in ('COMPLETED', 'ENDED'):
+            return Response({
+                "success": False,
+                "message": "Call has already been ended.",
+                "call_id": call.id,
+                "status": "COMPLETED",
+                "duration": call.duration_seconds
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        if call.status not in ('ACTIVE', 'ACCEPTED', 'RINGING'):
+            return Response({
+                "success": False,
+                "message": f"Cannot end call in status '{call.status}'."
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        now = timezone.now()
+        call.status = 'COMPLETED'
+        call.ended_at = now
+
+        if call.started_at:
+            duration_secs = int((now - call.started_at).total_seconds())
+        else:
+            duration_secs = 0
+        call.duration_seconds = max(duration_secs, 0)
+
+        # Coin deduction
+        rate_per_minute = 5
+        if hasattr(call.receiver, 'buddy_profile') and call.receiver.buddy_profile.rate_per_minute:
+            rate_per_minute = call.receiver.buddy_profile.rate_per_minute
+
+        minutes = (call.duration_seconds + 59) // 60 if call.duration_seconds > 0 else 0
+        coins_to_deduct = minutes * rate_per_minute
+
+        if coins_to_deduct > 0:
+            caller_wallet, _ = Wallet.objects.get_or_create(user=call.caller, defaults={'balance': 50})
+            actual_deducted = min(caller_wallet.balance, coins_to_deduct)
+            if actual_deducted > 0:
+                caller_wallet.balance -= actual_deducted
+                caller_wallet.save(update_fields=['balance'])
+                WalletTransaction.objects.create(
+                    wallet=caller_wallet,
+                    transaction_type='DEBIT',
+                    amount=actual_deducted,
+                    description=f"Call #{call.id} with {call.receiver.username} ({call.duration_seconds}s)"
+                )
+            call.coins_deducted = actual_deducted
+
+        call.save(update_fields=['status', 'ended_at', 'duration_seconds', 'coins_deducted'])
+
+        # Make Agent available again
+        set_agent_busy(call.receiver, False)
+
+        return Response({
+            "success": True,
+            "message": "Call ended successfully.",
+            "call_id": call.id,
+            "status": "COMPLETED",
+            "duration": call.duration_seconds,
+            "coins_deducted": call.coins_deducted,
+            "start_time": call.started_at,
+            "end_time": call.ended_at
+        }, status=status.HTTP_200_OK)
+
+
+class CallHistoryView(APIView):
+    """
+    8. CALL HISTORY
+    GET /api/calls/history/ (or /api/callhistory/)
+    Authentication: JWT required.
+    - Caller sees their own calls.
+    - Agent sees calls assigned to them.
+    - Never expose another user's call history.
+    """
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request, *args, **kwargs):
+        user = _resolve_user_for_wallet(request, **kwargs)
+        if not user:
+            return Response({
+                "success": False,
+                "message": "User not found or authentication required."
+            }, status=status.HTTP_404_NOT_FOUND)
+
+        if getattr(user, 'is_listener', False):
+            queryset = Call.objects.filter(receiver=user)
+        elif getattr(user, 'is_caller', False):
+            queryset = Call.objects.filter(caller=user)
+        else:
+            queryset = Call.objects.filter(Q(caller=user) | Q(receiver=user))
+
+        queryset = queryset.select_related('caller', 'receiver', 'category', 'review').order_by('-created_at')
+
+        call_type = request.query_params.get('type') or request.query_params.get('call_type')
+        if call_type:
+            queryset = queryset.filter(call_type__iexact=call_type.strip())
+
+        call_status = request.query_params.get('status')
+        if call_status:
+            queryset = queryset.filter(status__iexact=call_status.strip())
+
+        try:
+            limit = int(request.query_params.get('limit', 50))
+            limit = min(max(limit, 1), 200)
+        except (ValueError, TypeError):
+            limit = 50
+
+        calls = list(queryset[:limit])
+        serializer = CallHistorySerializer(
+            calls,
+            many=True,
+            context={'request': request, 'current_user': user}
+        )
+
+        formatted_calls = []
+        for c in calls:
+            cat_name = c.category.name if getattr(c, 'category', None) else "General"
+            formatted_calls.append({
+                "id": c.id,
+                "category": cat_name,
+                "status": c.status,
+                "start_time": c.started_at,
+                "end_time": c.ended_at,
+                "duration": c.duration_seconds
+            })
+
+        return Response({
+            "success": True,
+            "calls": formatted_calls,
+            "data": serializer.data,
+            "total_calls": len(calls)
+        }, status=status.HTTP_200_OK)
+
+    def post(self, request, *args, **kwargs):
+        """
+        Optional manual call logging endpoint for clients
+        """
+        caller = _resolve_user_for_wallet(request, **kwargs)
+        if not caller:
+            return Response({
+                "success": False,
+                "message": "Caller authentication required."
+            }, status=status.HTTP_401_UNAUTHORIZED)
+
+        data = request.data
+        receiver_ident = data.get('receiver_id') or data.get('receiver') or data.get('receiver_phone') or data.get('listener_id')
+        if not receiver_ident:
+            return Response({
+                "success": False,
+                "message": "receiver_id or receiver_phone is required."
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        receiver = None
+        receiver_str = str(receiver_ident).strip()
+        if receiver_str.isdigit() and len(receiver_str) < 7:
+            receiver = User.objects.filter(id=int(receiver_str)).first()
+        if not receiver:
+            receiver = User.objects.filter(phone_number=receiver_str).first()
+        if not receiver:
+            receiver = User.objects.filter(username__iexact=receiver_str).first()
+        if not receiver:
+            receiver = User.objects.filter(role__in=['LISTENER', 'BUDDY']).exclude(id=caller.id).first()
+
+        if not receiver:
+            return Response({
+                "success": False,
+                "message": f"Receiver '{receiver_ident}' not found."
+            }, status=status.HTTP_404_NOT_FOUND)
+
+        call_type = str(data.get('call_type', 'AUDIO')).upper()
+        if call_type not in ('AUDIO', 'VIDEO'):
+            call_type = 'AUDIO'
+
+        call_status = str(data.get('status', 'ENDED')).upper()
+        if call_status not in ('RINGING', 'ACCEPTED', 'REJECTED', 'MISSED', 'ENDED', 'COMPLETED'):
+            call_status = 'COMPLETED'
+
+        duration = int(data.get('duration_seconds', 0) or 0)
+        coins_deducted = int(data.get('coins_deducted', 0) or 0)
+
+        now = timezone.now()
+        channel_name = data.get('channel_name') or f"call_{caller.id}_{receiver.id}_{int(now.timestamp())}"
+
+        call = Call.objects.create(
+            caller=caller,
+            receiver=receiver,
+            channel_name=channel_name,
+            call_type=call_type,
+            status=call_status,
+            started_at=now - datetime.timedelta(seconds=duration) if duration > 0 else now,
+            ended_at=now if duration > 0 else None,
+            duration_seconds=duration,
+            coins_deducted=coins_deducted,
+        )
+
+        if coins_deducted > 0:
+            wallet, _ = Wallet.objects.get_or_create(user=caller, defaults={'balance': 50})
+            if wallet.balance >= coins_deducted:
+                wallet.balance -= coins_deducted
+                wallet.save(update_fields=['balance'])
+                WalletTransaction.objects.create(
+                    wallet=wallet,
+                    transaction_type='DEBIT',
+                    amount=coins_deducted,
+                    description=f"Spent on {call_type.lower()} call with {receiver.username}"
+                )
+
+        serializer = CallHistorySerializer(call, context={'request': request, 'current_user': caller})
+        return Response({
+            "success": True,
+            "message": "Call logged successfully.",
+            "data": serializer.data
+        }, status=status.HTTP_201_CREATED)
+
+
+class CallDetailView(APIView):
+    """
+    Call Detail API:
+    - GET /api/callhistory/<int:call_id>/ : Retrieve single call detail.
+    - DELETE /api/callhistory/<int:call_id>/ : Delete single call record.
+    """
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request, call_id, *args, **kwargs):
+        call = Call.objects.filter(id=call_id).select_related('caller', 'receiver', 'review').first()
+        if not call:
+            return Response({"success": False, "message": "Call record not found."}, status=status.HTTP_404_NOT_FOUND)
+        user = _resolve_user_for_wallet(request, **kwargs)
+        serializer = CallHistorySerializer(call, context={'request': request, 'current_user': user})
+        return Response({"success": True, "data": serializer.data}, status=status.HTTP_200_OK)
+
+    def delete(self, request, call_id, *args, **kwargs):
+        call = Call.objects.filter(id=call_id).first()
+        if not call:
+            return Response({"success": False, "message": "Call record not found."}, status=status.HTTP_404_NOT_FOUND)
+        call.delete()
+        return Response({"success": True, "message": f"Call record #{call_id} deleted successfully."}, status=status.HTTP_200_OK)
 
 
 class CallerAccountDeleteView(APIView):

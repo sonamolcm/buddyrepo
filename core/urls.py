@@ -29,6 +29,14 @@ from .views import (  # type: ignore
     WalletView,
     GetCoinsView,
     AddCoinsView,
+    CallRequestView,
+    IncomingCallsView,
+    AcceptCallView,
+    RejectCallView,
+    StartCallView,
+    EndCallView,
+    CallHistoryView,
+    CallDetailView,
     CallerAccountDeleteView,
     # Metadata Dropdowns
     LanguageListView,
@@ -196,6 +204,59 @@ urlpatterns = [
     path('add-coins', AddCoinsView.as_view()),
     path('addcoins/', AddCoinsView.as_view()),
     path('addcoins', AddCoinsView.as_view()),
+
+    # ==========================================
+    # 5.2 CALL WORKFLOW & HISTORY
+    # ==========================================
+    path('calls/request/', CallRequestView.as_view(), name='call-request'),
+    path('calls/request', CallRequestView.as_view()),
+    path('call/request/', CallRequestView.as_view()),
+    path('call/request', CallRequestView.as_view()),
+    path('callrequest/', CallRequestView.as_view()),
+    path('callrequest', CallRequestView.as_view()),
+    path('call-request/', CallRequestView.as_view()),
+    path('call-request', CallRequestView.as_view()),
+
+    path('calls/incoming/', IncomingCallsView.as_view(), name='calls-incoming'),
+    path('calls/incoming', IncomingCallsView.as_view()),
+    path('call/incoming/', IncomingCallsView.as_view()),
+    path('call/incoming', IncomingCallsView.as_view()),
+
+    path('calls/<int:call_id>/accept/', AcceptCallView.as_view(), name='call-accept'),
+    path('calls/<int:call_id>/accept', AcceptCallView.as_view()),
+    path('call/<int:call_id>/accept/', AcceptCallView.as_view()),
+    path('call/<int:call_id>/accept', AcceptCallView.as_view()),
+
+    path('calls/<int:call_id>/reject/', RejectCallView.as_view(), name='call-reject'),
+    path('calls/<int:call_id>/reject', RejectCallView.as_view()),
+    path('call/<int:call_id>/reject/', RejectCallView.as_view()),
+    path('call/<int:call_id>/reject', RejectCallView.as_view()),
+
+    path('calls/<int:call_id>/start/', StartCallView.as_view(), name='call-start'),
+    path('calls/<int:call_id>/start', StartCallView.as_view()),
+    path('call/<int:call_id>/start/', StartCallView.as_view()),
+    path('call/<int:call_id>/start', StartCallView.as_view()),
+
+    path('calls/<int:call_id>/end/', EndCallView.as_view(), name='call-end'),
+    path('calls/<int:call_id>/end', EndCallView.as_view()),
+    path('call/<int:call_id>/end/', EndCallView.as_view()),
+    path('call/<int:call_id>/end', EndCallView.as_view()),
+
+    path('calls/history/', CallHistoryView.as_view(), name='calls-history'),
+    path('calls/history', CallHistoryView.as_view()),
+    path('call/history/', CallHistoryView.as_view()),
+    path('call/history', CallHistoryView.as_view()),
+    path('callhistory/', CallHistoryView.as_view(), name='call-history'),
+    path('callhistory', CallHistoryView.as_view()),
+    path('call-history/', CallHistoryView.as_view(), name='call-history-alias'),
+    path('call-history', CallHistoryView.as_view()),
+    path('calls/', CallHistoryView.as_view(), name='calls-list'),
+    path('calls', CallHistoryView.as_view()),
+    path('callhistory/<int:call_id>/', CallDetailView.as_view(), name='call-detail'),
+    path('callhistory/<int:call_id>', CallDetailView.as_view()),
+    path('call-history/<int:call_id>/', CallDetailView.as_view()),
+    path('call-history/<int:call_id>', CallDetailView.as_view()),
+
     path('caller/account/', CallerAccountDeleteView.as_view(), name='caller-account-delete'),
     path('caller/account', CallerAccountDeleteView.as_view()),
 

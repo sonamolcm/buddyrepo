@@ -314,4 +314,223 @@ class CategorySerializer(serializers.ModelSerializer):
         return name
 
 
+# ==========================================
+# 7. CALL & CALL HISTORY SERIALIZERS
+# ==========================================
+class CallReviewSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CallReview
+        fields = ('id', 'rating', 'feedback', 'created_at')
+
+
+class CallHistorySerializer(serializers.ModelSerializer):
+    category = serializers.SerializerMethodField()
+    start_time = serializers.DateTimeField(source='started_at', read_only=True)
+    end_time = serializers.DateTimeField(source='ended_at', read_only=True)
+    duration = serializers.IntegerField(source='duration_seconds', read_only=True)
+
+    caller_id = serializers.ReadOnlyField(source='caller.id')
+    caller_name = serializers.SerializerMethodField()
+    caller_phone = serializers.ReadOnlyField(source='caller.phone_number')
+    caller_photo = serializers.SerializerMethodField()
+
+    receiver_id = serializers.ReadOnlyField(source='receiver.id')
+    receiver_name = serializers.SerializerMethodField()
+    receiver_phone = serializers.ReadOnlyField(source='receiver.phone_number')
+    receiver_photo = serializers.SerializerMethodField()
+
+    agent = serializers.SerializerMethodField()
+    caller = serializers.SerializerMethodField()
+    other_user = serializers.SerializerMethodField()
+    is_incoming = serializers.SerializerMethodField()
+    duration_formatted = serializers.SerializerMethodField()
+    review = CallReviewSerializer(read_only=True)
+
+    class Meta:
+        model = Call
+        fields = (
+            'id',
+            'channel_name',
+            'call_type',
+            'status',
+            'category',
+            'caller_id',
+            'caller_name',
+            'caller_phone',
+            'caller_photo',
+            'caller',
+            'receiver_id',
+            'receiver_name',
+            'receiver_phone',
+            'receiver_photo',
+            'agent',
+            'other_user',
+            'is_incoming',
+            'start_time',
+            'end_time',
+            'started_at',
+            'ended_at',
+            'duration',
+            'duration_seconds',
+            'duration_formatted',
+            'coins_deducted',
+            'review',
+            'created_at',
+        )
+
+    def _get_user_info(self, user, request):
+        if not user:
+            return {}
+        name = user.get_full_name() or user.username
+        photo = None
+        role = getattr(user, 'role', '')
+        if hasattr(user, 'caller_profile') and getattr(user.caller_profile, 'profile_picture', None):
+            photo = user.caller_profile.profile_picture.url
+            if user.caller_profile.name:
+                name = user.caller_profile.name
+        elif hasattr(user, 'listener_profile') and getattr(user.listener_profile, 'avatar', None):
+            photo = user.listener_profile.avatar.url
+            if user.listener_profile.name:
+                name = user.listener_profile.name
+        elif hasattr(user, 'listener_profile') and getattr(user.listener_profile, 'profile_picture', None):
+            photo = user.listener_profile.profile_picture.url
+            if user.listener_profile.name:
+                name = user.listener_profile.name
+
+        if photo and request and not photo.startswith(('http://', 'https://')):
+            photo = request.build_absolute_uri(photo)
+
+        return {
+            'id': user.id,
+            'name': name,
+            'username': user.username,
+            'phone_number': getattr(user, 'phone_number', ''),
+            'role': role,
+            'profile_picture': photo,
+        }
+
+    def get_category(self, obj):
+        if getattr(obj, 'category', None):
+            return obj.category.name
+        return "General"
+
+    def get_caller_name(self, obj):
+        if not obj.caller:
+            return ""
+        if hasattr(obj.caller, 'caller_profile') and getattr(obj.caller.caller_profile, 'name', ''):
+            return obj.caller.caller_profile.name
+        return obj.caller.get_full_name() or obj.caller.username
+
+    def get_caller_photo(self, obj):
+        request = self.context.get('request')
+        if hasattr(obj.caller, 'caller_profile') and getattr(obj.caller.caller_profile, 'profile_picture', None):
+            url = obj.caller.caller_profile.profile_picture.url
+            return request.build_absolute_uri(url) if request and not url.startswith(('http://', 'https://')) else url
+        return None
+
+    def get_receiver_name(self, obj):
+        if not obj.receiver:
+            return ""
+        if hasattr(obj.receiver, 'listener_profile') and getattr(obj.receiver.listener_profile, 'name', ''):
+            return obj.receiver.listener_profile.name
+        return obj.receiver.get_full_name() or obj.receiver.username
+
+    def get_receiver_photo(self, obj):
+        request = self.context.get('request')
+        if hasattr(obj.receiver, 'listener_profile') and getattr(obj.receiver.listener_profile, 'profile_picture', None):
+            url = obj.receiver.listener_profile.profile_picture.url
+            return request.build_absolute_uri(url) if request and not url.startswith(('http://', 'https://')) else url
+        return None
+
+    def get_caller(self, obj):
+        request = self.context.get('request')
+        return self._get_user_info(obj.caller, request)
+
+    def get_agent(self, obj):
+        request = self.context.get('request')
+        return self._get_user_info(obj.receiver, request)
+
+    def get_is_incoming(self, obj):
+        current_user = self.context.get('current_user')
+        if current_user and obj.receiver_id == current_user.id:
+            return True
+        return False
+
+    def get_other_user(self, obj):
+        request = self.context.get('request')
+        current_user = self.context.get('current_user')
+        other = obj.receiver if current_user and obj.caller_id == current_user.id else obj.caller
+        return self._get_user_info(other, request)
+
+    def get_duration_formatted(self, obj):
+        total_secs = obj.duration_seconds or 0
+        minutes = total_secs // 60
+        seconds = total_secs % 60
+        return f"{minutes:02d}:{seconds:02d}"
+
+
+class CallRequestSerializer(serializers.Serializer):
+    category_id = serializers.IntegerField(required=True)
+
+    def validate_category_id(self, value):
+        category = Category.objects.filter(id=value, is_active=True).first()
+        if not category:
+            raise serializers.ValidationError(f"Category with ID {value} does not exist or is inactive.")
+        return value
+
+    def validate(self, attrs):
+        initial_data = getattr(self, 'initial_data', {})
+        if 'agent_id' in initial_data or 'listener_id' in initial_data:
+            raise serializers.ValidationError({
+                "error": "Callers cannot select a specific agent. Please select a category only."
+            })
+        return attrs
+
+
+class IncomingCallSerializer(serializers.ModelSerializer):
+    caller = serializers.SerializerMethodField()
+    category = serializers.SerializerMethodField()
+    requested_at = serializers.DateTimeField(source='created_at', read_only=True)
+
+    class Meta:
+        model = Call
+        fields = (
+            'id',
+            'channel_name',
+            'caller',
+            'category',
+            'status',
+            'requested_at',
+        )
+
+    def get_caller(self, obj):
+        caller = obj.caller
+        name = caller.get_full_name() or caller.username
+        photo = None
+        if hasattr(caller, 'caller_profile') and caller.caller_profile.name:
+            name = caller.caller_profile.name
+        if hasattr(caller, 'caller_profile') and caller.caller_profile.profile_picture:
+            request = self.context.get('request')
+            url = caller.caller_profile.profile_picture.url
+            photo = request.build_absolute_uri(url) if request and not url.startswith(('http://', 'https://')) else url
+
+        return {
+            'id': caller.id,
+            'name': name,
+            'phone_number': getattr(caller, 'phone_number', ''),
+            'profile_picture': photo,
+        }
+
+    def get_category(self, obj):
+        if getattr(obj, 'category', None):
+            return {
+                'id': obj.category.id,
+                'name': obj.category.name,
+            }
+        return {
+            'id': None,
+            'name': 'General',
+        }
+
+
 

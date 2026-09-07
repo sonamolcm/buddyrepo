@@ -281,17 +281,24 @@ class Call(models.Model):
         ('VIDEO', 'Video Call'),
     )
     CALL_STATUS = (
+        ('PENDING', 'Pending'),
         ('RINGING', 'Ringing'),
         ('ACCEPTED', 'Accepted'),
+        ('ACTIVE', 'Active'),
+        ('COMPLETED', 'Completed'),
         ('REJECTED', 'Rejected'),
+        ('CANCELLED', 'Cancelled'),
         ('MISSED', 'Missed'),
         ('ENDED', 'Ended'),
     )
     caller = models.ForeignKey(User, on_delete=models.CASCADE, related_name='outgoing_calls')
     receiver = models.ForeignKey(User, on_delete=models.CASCADE, related_name='incoming_calls')
+    category = models.ForeignKey(Category, on_delete=models.SET_NULL, null=True, blank=True, related_name='calls')
     channel_name = models.CharField(max_length=100, unique=True, help_text="WebRTC / Agora channel ID")
     call_type = models.CharField(max_length=10, choices=CALL_TYPES, default='AUDIO')
-    status = models.CharField(max_length=15, choices=CALL_STATUS, default='RINGING')
+    status = models.CharField(max_length=20, choices=CALL_STATUS, default='RINGING')
+    accepted_at = models.DateTimeField(null=True, blank=True)
+    rejected_at = models.DateTimeField(null=True, blank=True)
     started_at = models.DateTimeField(null=True, blank=True)
     ended_at = models.DateTimeField(null=True, blank=True)
     duration_seconds = models.PositiveIntegerField(default=0)
@@ -299,7 +306,8 @@ class Call(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
-        return f"Call {self.id}: {self.caller.username} -> {self.receiver.username} ({self.status})"
+        cat_name = self.category.name if self.category else "General"
+        return f"Call {self.id} [{cat_name}]: {self.caller.username} -> {self.receiver.username} ({self.status})"
 
 
 class CallReview(models.Model):
