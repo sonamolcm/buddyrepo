@@ -268,10 +268,14 @@ urlpatterns = [
     path('favourites', CallerFavoritesView.as_view()),
     path('favourites/<int:agent_id>/', CallerFavoriteDetailView.as_view(), name='caller-favourite-detail'),
     path('favourites/<int:agent_id>', CallerFavoriteDetailView.as_view()),
+    path('favourites/<str:agent_id>/', CallerFavoriteDetailView.as_view()),
+    path('favourites/<str:agent_id>', CallerFavoriteDetailView.as_view()),
     path('favorites/', CallerFavoritesView.as_view(), name='caller-favorites'),
     path('favorites', CallerFavoritesView.as_view()),
     path('favorites/<int:agent_id>/', CallerFavoriteDetailView.as_view(), name='caller-favorite-detail'),
     path('favorites/<int:agent_id>', CallerFavoriteDetailView.as_view()),
+    path('favorites/<str:agent_id>/', CallerFavoriteDetailView.as_view()),
+    path('favorites/<str:agent_id>', CallerFavoriteDetailView.as_view()),
 
     # ==========================================
     # 6. METADATA DROPDOWNS (LANGUAGES, INTERESTS & CATEGORIES)
