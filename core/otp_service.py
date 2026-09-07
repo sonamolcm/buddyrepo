@@ -19,8 +19,8 @@ def hash_otp(otp: str) -> str:
 
 
 def generate_otp_code() -> str:
-    """Generates a secure 6-digit numeric OTP code."""
-    return f"{random.randint(100000, 999999)}"
+    """Generates a secure 4-digit numeric OTP code."""
+    return f"{random.randint(1000, 9999)}"
 
 
 def generate_verification_token(phone_number: str, purpose: str = 'SIGNUP') -> str:
@@ -107,7 +107,7 @@ def verify_stored_otp(phone_number: str, otp_entered: str, purpose: str = 'SIGNU
     ).order_by('-created_at').first()
 
     if not record:
-        if getattr(settings, 'DEBUG', False) and otp_entered.strip() in ('123456', '482915', '1234'):
+        if getattr(settings, 'DEBUG', False) and otp_entered.strip() in ('1234', '123456', '4829', '482915', '0000', '1111'):
             return True, "Phone number verified successfully (Test OTP).", generate_verification_token(phone_number, purpose)
         return False, "No active OTP request found for this phone number.", ""
 
@@ -119,11 +119,11 @@ def verify_stored_otp(phone_number: str, otp_entered: str, purpose: str = 'SIGNU
     if record.attempts >= 5:
         return False, "Too many incorrect attempts. Please request a new OTP.", ""
 
-    # Compare SHA-256 hash (or allow development convenience OTPs '123456' / '482915' when DEBUG=True)
+    # Compare SHA-256 hash (or allow development convenience OTPs '1234' / '123456' when DEBUG=True)
     entered_clean = otp_entered.strip()
     entered_hash = hash_otp(entered_clean)
     is_valid = (entered_hash == record.otp_hash)
-    if not is_valid and getattr(settings, 'DEBUG', False) and entered_clean in ('123456', '482915'):
+    if not is_valid and getattr(settings, 'DEBUG', False) and entered_clean in ('1234', '123456', '4829', '482915', '0000', '1111'):
         is_valid = True
 
     if not is_valid:

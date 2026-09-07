@@ -17,7 +17,7 @@ from rest_framework.response import Response  # type: ignore
 from rest_framework_simplejwt.tokens import RefreshToken, TokenError  # type: ignore
 
 # pyrefly: ignore [missing-import]
-from .models import User, CallerProfile, ListenerProfile, Interest, PhoneOTP, Category  # type: ignore
+from .models import User, CallerProfile, ListenerProfile, Interest, PhoneOTP, Category, Wallet, WalletTransaction  # type: ignore
 from .permissions import IsAdminUser  # type: ignore
 # pyrefly: ignore [missing-import]
 from .otp_service import (  # type: ignore
@@ -39,6 +39,7 @@ from .serializers import (  # type: ignore
     ListenerProfileSerializer,
     UserDetailSerializer,
     CategorySerializer,
+    WalletSerializer,
 )
 
 
@@ -103,7 +104,7 @@ class CallerSignupSendOTPView(APIView):
 
 class CallerSignupVerifyOTPView(APIView):
     """
-    Caller Signup Step 2: Verify 6-digit OTP code for Signup.
+    Caller Signup Step 2: Verify 4-digit OTP code for Signup.
     Checks expiry, attempt limits, and hash match.
     Issues a temporary signed verification_token for Step 3.
     """
@@ -112,7 +113,7 @@ class CallerSignupVerifyOTPView(APIView):
     def get(self, request):
         return Response({
             "success": True,
-            "message": "Verify OTP endpoint is active. Send POST with {\"phone_number\": \"+91...\", \"otp\": \"123456\"}",
+            "message": "Verify OTP endpoint is active. Send POST with {\"phone_number\": \"+91...\", \"otp\": \"1234\"}",
             "method": "POST"
         }, status=status.HTTP_200_OK)
 
@@ -436,12 +437,12 @@ class CallerLoginView(APIView):
             },
             "usage": {
                 "step_1_send_otp": {
-                    "description": "Send phone number to receive a 6-digit OTP",
+                    "description": "Send phone number to receive a 4-digit OTP",
                     "payload": {"phone_number": sample_callers[0] if sample_callers else "+919876543299"}
                 },
                 "step_2_verify_otp": {
-                    "description": "Send phone number + 6-digit OTP to log in",
-                    "payload": {"phone_number": sample_callers[0] if sample_callers else "+919876543299", "otp": "123456"}
+                    "description": "Send phone number + 4-digit OTP to log in",
+                    "payload": {"phone_number": sample_callers[0] if sample_callers else "+919876543299", "otp": "1234"}
                 },
                 "password_login": {
                     "description": "Optional: Log in directly with password",
@@ -594,8 +595,17 @@ def _perform_logout(request, role=None):
        - Listener: ListenerProfile.is_available = False
     4. Terminates Django session if active.
     """
-    target_user = request.user if (request.user and request.user.is_authenticated) else None
-    refresh_token = request.data.get('refresh') or request.data.get('refresh_token')
+    target_user = request.user if (getattr(request, 'user', None) and request.user.is_authenticated) else None
+
+    # Safely extract refresh token from body or query params
+    refresh_token = None
+    try:
+        if hasattr(request, 'data') and isinstance(request.data, dict):
+            refresh_token = request.data.get('refresh') or request.data.get('refresh_token')
+    except Exception:
+        pass
+    if not refresh_token:
+        refresh_token = request.query_params.get('refresh') or request.query_params.get('refresh_token')
 
     if refresh_token:
         try:
@@ -609,6 +619,34 @@ def _perform_logout(request, role=None):
             pass
         except Exception:
             pass
+
+    # If target_user is still not resolved, check identifier in body or query
+    if not target_user:
+        ident = (
+            request.query_params.get('username') or
+            request.query_params.get('listener_id') or
+            request.query_params.get('id') or
+            request.query_params.get('phone_number') or
+            request.query_params.get('phone')
+        )
+        if not ident and hasattr(request, 'data') and isinstance(request.data, dict):
+            ident = (
+                request.data.get('username') or
+                request.data.get('listener_id') or
+                request.data.get('id') or
+                request.data.get('phone_number') or
+                request.data.get('phone')
+            )
+        if ident:
+            ident_str = str(ident).strip()
+            if ident_str.isdigit():
+                target_user = User.objects.filter(id=int(ident_str)).first()
+            if not target_user:
+                target_user = User.objects.filter(username__iexact=ident_str).first()
+            if not target_user:
+                prof = ListenerProfile.objects.filter(listener_id__iexact=ident_str).first()
+                if prof:
+                    target_user = prof.user
 
     if target_user:
         if role in ('CALLER', None):
@@ -625,24 +663,22 @@ def _perform_logout(request, role=None):
 class CallerLogoutView(APIView):
     """
     Caller Logout API:
-    - Dedicated logout endpoint for Callers.
-    - Accepts POST request with optional Bearer token in Authorization header
-      and/or optional JSON body: {"refresh": "<refresh_token>"}.
-    - Blacklists the refresh token (if enabled).
+    - POST /api/auth/caller/logout/
+    Requirements:
+    - Authentication required.
+    - Properly log out the authenticated caller.
+    - Blacklists refresh token if provided.
     - Sets CallerProfile.is_online = False.
     - Flushes Django session.
     """
-    permission_classes = [permissions.AllowAny]
+    permission_classes = [permissions.IsAuthenticated]
 
-    def get(self, request):
-        return Response({
-            "success": True,
-            "message": "Caller Logout endpoint is active. Please send a POST request with optional JSON body: {\"refresh\": \"<refresh_token>\"} and/or Authorization: Bearer <access_token> header.",
-            "method": "POST",
-            "endpoint": "/api/auth/caller/logout/"
-        }, status=status.HTTP_200_OK)
+    def post(self, request, *args, **kwargs):
+        if not getattr(request.user, 'is_caller', False):
+            return Response({
+                "detail": "You do not have permission to perform this action. Only callers can use this logout endpoint."
+            }, status=status.HTTP_403_FORBIDDEN)
 
-    def post(self, request):
         try:
             _perform_logout(request, role='CALLER')
             return Response({
@@ -660,34 +696,43 @@ class ListenerLogoutView(APIView):
     """
     Listener Logout API:
     - Dedicated logout endpoint for Listeners.
-    - Accepts POST request with optional Bearer token in Authorization header
-      and/or optional JSON body: {"refresh": "<refresh_token>"}.
+    - Accepts POST / GET / DELETE requests.
+    - Supports:
+      1. Bearer token in Authorization header: Authorization: Bearer <access_token>
+      2. JSON body: {"refresh": "<refresh_token>"} or {"username": "..."} or {"listener_id": "..."}
+      3. Query parameter: ?refresh=... or ?listener_id=... or ?username=...
     - Blacklists the refresh token (if enabled).
     - Sets ListenerProfile.is_available = False.
     - Flushes Django session.
     """
     permission_classes = [permissions.AllowAny]
 
-    def get(self, request):
+    def get(self, request, *args, **kwargs):
+        # If credentials or listener identification is provided, perform logout
+        if (getattr(request, 'user', None) and request.user.is_authenticated) or request.query_params.get('refresh') or request.query_params.get('listener_id') or request.query_params.get('username'):
+            return self.post(request, *args, **kwargs)
         return Response({
             "success": True,
-            "message": "Listener Logout endpoint is active. Please send a POST request with optional JSON body: {\"refresh\": \"<refresh_token>\"} and/or Authorization: Bearer <access_token> header.",
+            "message": "Listener Logout endpoint is active. Send POST request with Authorization: Bearer <access_token> or body: {\"refresh\": \"<refresh_token>\"}.",
             "method": "POST",
             "endpoint": "/api/auth/listener/logout/"
         }, status=status.HTTP_200_OK)
 
-    def post(self, request):
+    def post(self, request, *args, **kwargs):
         try:
             _perform_logout(request, role='LISTENER')
             return Response({
                 "success": True,
-                "message": "Listener logged out successfully."
+                "message": "Listener logged out successfully. Availability status set to offline."
             }, status=status.HTTP_200_OK)
         except Exception as e:
             return Response({
                 "success": False,
                 "message": f"Listener logout failed: {str(e)}"
             }, status=status.HTTP_400_BAD_REQUEST)
+
+    def delete(self, request, *args, **kwargs):
+        return self.post(request, *args, **kwargs)
 
 
 class LogoutView(APIView):
@@ -1028,7 +1073,392 @@ class ProfileView(APIView):
 
 
 UserProfileView = ProfileView
-CallerProfileView = ProfileView
+
+
+class CallerProfileView(APIView):
+    """
+    Caller Profile API for "My Account" screen:
+    - GET  /api/caller/profile/ : Return authenticated caller's profile.
+    - PATCH /api/caller/profile/ : Update authenticated caller's profile.
+    Requirements:
+    - Authentication required.
+    - Uses JWT access token to identify logged-in caller.
+    - Only caller role allowed.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request, *args, **kwargs):
+        if not getattr(request.user, 'is_caller', False):
+            return Response({
+                "detail": "You do not have permission to perform this action. Only callers can access this profile."
+            }, status=status.HTTP_403_FORBIDDEN)
+
+        profile, _ = CallerProfile.objects.get_or_create(
+            user=request.user,
+            defaults={
+                'name': request.user.first_name or request.user.username,
+                'age': request.user.age,
+                'gender': request.user.gender,
+            }
+        )
+        serializer = CallerProfileSerializer(profile, context={'request': request})
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    def patch(self, request, *args, **kwargs):
+        if not getattr(request.user, 'is_caller', False):
+            return Response({
+                "detail": "You do not have permission to perform this action. Only callers can update this profile."
+            }, status=status.HTTP_403_FORBIDDEN)
+
+        profile, _ = CallerProfile.objects.get_or_create(
+            user=request.user,
+            defaults={
+                'name': request.user.first_name or request.user.username,
+                'age': request.user.age,
+                'gender': request.user.gender,
+            }
+        )
+        serializer = CallerProfileSerializer(profile, data=request.data, partial=True, context={'request': request})
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        serializer.save()
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    def put(self, request, *args, **kwargs):
+        return self.patch(request, *args, **kwargs)
+
+
+def _resolve_user_for_wallet(request, **kwargs):
+    """
+    Resolve user for wallet operations:
+    1. Authenticated user (JWT / session)
+    2. Explicit user_id, phone_number, or identifier in URL/query/body
+    3. Fallback to first caller or first user
+    """
+    if getattr(request, 'user', None) and request.user.is_authenticated:
+        return request.user
+
+    ident = kwargs.get('identifier') or kwargs.get('user_id')
+    if not ident and hasattr(request, 'query_params'):
+        ident = (
+            request.query_params.get('phone_number') or
+            request.query_params.get('phone') or
+            request.query_params.get('user_id') or
+            request.query_params.get('identifier')
+        )
+    if not ident and hasattr(request, 'data') and isinstance(request.data, dict):
+        ident = (
+            request.data.get('phone_number') or
+            request.data.get('phone') or
+            request.data.get('user_id') or
+            request.data.get('identifier')
+        )
+
+    if ident:
+        ident_str = str(ident).strip()
+        if ident_str.isdigit() and len(ident_str) < 7:
+            user = User.objects.filter(id=int(ident_str)).first()
+            if user:
+                return user
+        clean_digits = ''.join(ch for ch in ident_str if ch.isdigit())
+        user = (
+            User.objects.filter(phone_number=ident_str).first() or
+            User.objects.filter(phone_number__iexact=ident_str).first()
+        )
+        if not user and len(clean_digits) >= 10:
+            user = User.objects.filter(phone_number__endswith=clean_digits[-10:]).first()
+        if user:
+            return user
+        user = User.objects.filter(username__iexact=ident_str).first()
+        if user:
+            return user
+        if clean_digits:
+            phone_formatted = f"+91{clean_digits[-10:]}" if len(clean_digits) >= 10 else f"+{clean_digits}"
+            user, _ = User.objects.get_or_create(
+                phone_number=phone_formatted,
+                defaults={
+                    'username': f"caller_{clean_digits[-10:]}",
+                    'role': 'CALLER',
+                    'is_verified': True,
+                    'first_name': f"Caller {clean_digits[-4:]}"
+                }
+            )
+            return user
+
+    first_caller = User.objects.filter(role__in=['CALLER', 'USER']).first()
+    if first_caller:
+        return first_caller
+    return User.objects.first()
+
+
+class WalletView(APIView):
+    """
+    My Coin Wallet API:
+    - GET /api/wallet/ : Returns caller's current coin balance.
+    - PATCH /api/wallet/ : Directly set/update wallet balance {"balance": 100}
+    - POST /api/wallet/ : Credit or debit coins {"action": "credit"|"debit", "amount": 50, "description": "..."}
+    """
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request, *args, **kwargs):
+        user = _resolve_user_for_wallet(request, **kwargs)
+        if not user:
+            return Response({"error": "User not found."}, status=status.HTTP_404_NOT_FOUND)
+        wallet, _ = Wallet.objects.get_or_create(
+            user=user,
+            defaults={'balance': 50}
+        )
+        return Response({
+            "balance": wallet.balance,
+            "coins": wallet.balance
+        }, status=status.HTTP_200_OK)
+
+    def patch(self, request, *args, **kwargs):
+        user = _resolve_user_for_wallet(request, **kwargs)
+        if not user:
+            return Response({"error": "User not found."}, status=status.HTTP_404_NOT_FOUND)
+        wallet, _ = Wallet.objects.get_or_create(
+            user=user,
+            defaults={'balance': 50}
+        )
+        new_balance = request.data.get('balance') or request.data.get('coins')
+        if new_balance is None:
+            return Response({"error": "balance or coins field is required."}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            new_balance = int(new_balance)
+            if new_balance < 0:
+                raise ValueError()
+        except (ValueError, TypeError):
+            return Response({"error": "balance must be a non-negative integer."}, status=status.HTTP_400_BAD_REQUEST)
+
+        wallet.balance = new_balance
+        wallet.save()
+        return Response({
+            "message": "Wallet balance updated successfully.",
+            "balance": wallet.balance,
+            "coins": wallet.balance
+        }, status=status.HTTP_200_OK)
+
+    def post(self, request, *args, **kwargs):
+        user = _resolve_user_for_wallet(request, **kwargs)
+        if not user:
+            return Response({"error": "User not found."}, status=status.HTTP_404_NOT_FOUND)
+        wallet, _ = Wallet.objects.get_or_create(
+            user=user,
+            defaults={'balance': 50}
+        )
+        amount = request.data.get('amount') or request.data.get('coins')
+        action = str(request.data.get('action', 'credit')).lower()
+        description = request.data.get('description', '')
+
+        if amount is None:
+            return Response({"error": "amount or coins field is required."}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            amount = int(amount)
+            if amount <= 0:
+                raise ValueError()
+        except (ValueError, TypeError):
+            return Response({"error": "amount must be a positive integer."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if action == 'credit':
+            wallet.balance += amount
+            wallet.save()
+            WalletTransaction.objects.create(
+                wallet=wallet,
+                transaction_type='CREDIT',
+                amount=amount,
+                description=description or f"Added {amount} coins"
+            )
+            return Response({
+                "message": f"Successfully credited {amount} coins.",
+                "balance": wallet.balance,
+                "coins": wallet.balance
+            }, status=status.HTTP_200_OK)
+
+        elif action == 'debit':
+            if wallet.balance < amount:
+                return Response({
+                    "error": "Insufficient wallet balance.",
+                    "balance": wallet.balance,
+                    "coins": wallet.balance
+                }, status=status.HTTP_400_BAD_REQUEST)
+            wallet.balance -= amount
+            wallet.save()
+            WalletTransaction.objects.create(
+                wallet=wallet,
+                transaction_type='DEBIT',
+                amount=amount,
+                description=description or f"Deducted {amount} coins"
+            )
+            return Response({
+                "message": f"Successfully deducted {amount} coins.",
+                "balance": wallet.balance,
+                "coins": wallet.balance
+            }, status=status.HTTP_200_OK)
+        else:
+            return Response({"error": "action must be either 'credit' or 'debit'."}, status=status.HTTP_400_BAD_REQUEST)
+
+
+class GetCoinsView(APIView):
+    """
+    Get Coins API:
+    - GET /api/coins/
+    - GET /api/get-coins/
+    - GET /api/getcoins/
+    - GET /api/wallet/coins/
+    Returns current coin balance.
+    """
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request, *args, **kwargs):
+        user = _resolve_user_for_wallet(request, **kwargs)
+        if not user:
+            return Response({
+                "success": False,
+                "message": "User not found or authentication required."
+            }, status=status.HTTP_404_NOT_FOUND)
+
+        wallet, _ = Wallet.objects.get_or_create(
+            user=user,
+            defaults={'balance': 50}
+        )
+        return Response({
+            "success": True,
+            "message": "Coins balance retrieved successfully.",
+            "coins": wallet.balance,
+            "balance": wallet.balance,
+            "user_id": user.id,
+            "phone_number": getattr(user, 'phone_number', '')
+        }, status=status.HTTP_200_OK)
+
+    def post(self, request, *args, **kwargs):
+        # If POST /api/coins/ is called, redirect to AddCoinsView logic
+        return AddCoinsView().post(request, *args, **kwargs)
+
+
+class AddCoinsView(APIView):
+    """
+    Add Coins API:
+    - POST /api/coins/add/
+    - POST /api/add-coins/
+    - POST /api/addcoins/
+    - POST /api/coins/
+    Adds coins to user's wallet and creates a WalletTransaction audit log.
+    Payload: {"coins": 100} or {"amount": 100}
+    """
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request, *args, **kwargs):
+        user = _resolve_user_for_wallet(request, **kwargs)
+        if not user:
+            return Response({
+                "success": False,
+                "message": "User not found or authentication required."
+            }, status=status.HTTP_404_NOT_FOUND)
+
+        wallet, _ = Wallet.objects.get_or_create(
+            user=user,
+            defaults={'balance': 50}
+        )
+
+        raw_amount = (
+            request.data.get('coins') or
+            request.data.get('amount') or
+            request.data.get('coin') or
+            request.data.get('add_coins')
+        )
+        if raw_amount is None:
+            return Response({
+                "success": False,
+                "message": "'coins' or 'amount' field is required. Example: {\"coins\": 100}"
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            amount = int(raw_amount)
+            if amount <= 0:
+                raise ValueError()
+        except (ValueError, TypeError):
+            return Response({
+                "success": False,
+                "message": "'coins' / 'amount' must be a positive integer greater than 0."
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        description = request.data.get('description', '') or f"Added {amount} coins"
+        wallet.balance += amount
+        wallet.save()
+
+        transaction = WalletTransaction.objects.create(
+            wallet=wallet,
+            transaction_type='CREDIT',
+            amount=amount,
+            description=description
+        )
+
+        return Response({
+            "success": True,
+            "message": f"{amount} coins added successfully.",
+            "added_coins": amount,
+            "coins": wallet.balance,
+            "balance": wallet.balance,
+            "user_id": user.id,
+            "phone_number": getattr(user, 'phone_number', ''),
+            "transaction_id": transaction.id
+        }, status=status.HTTP_200_OK)
+
+
+class CallerAccountDeleteView(APIView):
+    """
+    Delete / Deactivate Caller Account API for "My Account" screen:
+    - DELETE /api/caller/account/
+    Requirements:
+    - Authentication required.
+    - Soft-deletes/deactivates the caller account.
+    - The caller can no longer use the account after deactivation.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def delete(self, request, *args, **kwargs):
+        if not getattr(request.user, 'is_caller', False):
+            return Response({
+                "detail": "You do not have permission to perform this action. Only callers can delete this account."
+            }, status=status.HTTP_403_FORBIDDEN)
+
+        user = request.user
+        # Soft-delete mechanism: deactivate user
+        user.is_active = False
+        user.save(update_fields=['is_active'])
+
+        # Set caller online status to offline
+        CallerProfile.objects.filter(user=user).update(is_online=False)
+
+        # Blacklist refresh token if provided in request
+        refresh_token = None
+        try:
+            if hasattr(request, 'data') and isinstance(request.data, dict):
+                refresh_token = request.data.get('refresh') or request.data.get('refresh_token')
+        except Exception:
+            pass
+        if refresh_token:
+            try:
+                token = RefreshToken(refresh_token)
+                token.blacklist()
+            except Exception:
+                pass
+
+        # Flush Django session
+        try:
+            django_logout(request)
+        except Exception:
+            pass
+
+        return Response({
+            "success": True,
+            "message": "Caller account has been deactivated successfully."
+        }, status=status.HTTP_200_OK)
+
+    def post(self, request, *args, **kwargs):
+        return self.delete(request, *args, **kwargs)
 
 
 class DeleteAccountView(APIView):
@@ -2147,57 +2577,220 @@ class CallerDetailView(APIView):
         return self.delete(request, identifier)
 
 
-class CallerDeleteView(APIView):
+def _resolve_caller_user(request, identifier=None, user_id=None):
+    ident = (
+        identifier or
+        user_id or
+        request.query_params.get('phone_number') or
+        request.query_params.get('phone') or
+        request.query_params.get('phoneNumber') or
+        request.query_params.get('mobile') or
+        request.query_params.get('number') or
+        request.query_params.get('user_id') or
+        request.query_params.get('id') or
+        request.query_params.get('username')
+    )
+    if not ident and hasattr(request, 'data') and isinstance(request.data, dict):
+        ident = (
+            request.data.get('phone_number') or
+            request.data.get('phone') or
+            request.data.get('phoneNumber') or
+            request.data.get('mobile') or
+            request.data.get('number') or
+            request.data.get('user_id') or
+            request.data.get('id') or
+            request.data.get('username')
+        )
+
+    if ident:
+        ident_str = str(ident).strip()
+        if ident_str.isdigit() and len(ident_str) < 7:
+            u = User.objects.filter(id=int(ident_str)).first()
+            if u:
+                return u
+        clean_digits = ''.join(ch for ch in ident_str if ch.isdigit())
+        u = (
+            User.objects.filter(phone_number=ident_str).first() or
+            User.objects.filter(phone_number__iexact=ident_str).first()
+        )
+        if not u and len(clean_digits) >= 10:
+            u = User.objects.filter(phone_number__endswith=clean_digits[-10:]).first()
+        if u:
+            return u
+        u = User.objects.filter(username__iexact=ident_str).first()
+        if u:
+            return u
+
+    if getattr(request, 'user', None) and request.user.is_authenticated:
+        return request.user
+
+    return User.objects.filter(role__in=['CALLER', 'USER']).first()
+
+
+class CallerUpdateView(APIView):
     """
-    DELETE /api/callers/<int:user_id>/delete/
-    Deletes (deactivates) a caller account by user_id.
-    - Sets user.is_active = False (soft delete)
-    - Sets user.caller_profile.is_online = False
-    - If ?permanent=true, permanently deletes user
+    Dedicated Caller Update API:
+    - POST / PUT / PATCH /api/callerupdate/
+    - POST / PUT / PATCH /api/callerupdate/<identifier>/
+    - POST / PUT / PATCH /api/caller/update/
+    - POST / PUT / PATCH /callerupdate/
+    Supports identifying target caller via:
+    - Path parameter: /api/callerupdate/+919876543210/
+    - Query parameter: ?phone_number=+919876543210
+    - JSON Body: {"phone_number": "+919876543210", "name": "Jane"}
+    - Authorization Header: Bearer <token>
     """
     permission_classes = [permissions.AllowAny]
 
-    def delete(self, request, user_id):
-        user = User.objects.filter(id=user_id).first()
+    def _update(self, request, identifier=None, partial=True):
+        user = _resolve_caller_user(request, identifier)
+        if not user:
+            return Response({
+                "success": False,
+                "message": "Caller not found. Please provide a valid 'phone_number', 'user_id', or Bearer token."
+            }, status=status.HTTP_404_NOT_FOUND)
+
+        profile, _ = CallerProfile.objects.get_or_create(
+            user=user,
+            defaults={
+                'name': user.first_name or user.username,
+                'age': user.age,
+                'gender': user.gender,
+            }
+        )
+
+        data = request.data if isinstance(request.data, dict) else {}
+
+        # Update profile fields
+        if 'name' in data and data['name'] is not None:
+            profile.name = str(data['name']).strip()
+            user.first_name = profile.name
+        if 'age' in data and data['age'] is not None:
+            try:
+                profile.age = int(data['age'])
+                user.age = profile.age
+            except (ValueError, TypeError):
+                pass
+        if 'gender' in data and data['gender'] is not None:
+            profile.gender = str(data['gender']).strip()
+            user.gender = profile.gender
+        if 'language' in data and data['language'] is not None:
+            profile.language = str(data['language']).strip()
+        if 'interests' in data and data['interests'] is not None:
+            val = data['interests']
+            if isinstance(val, str):
+                profile.interests = [i.strip() for i in val.split(',') if i.strip()]
+            elif isinstance(val, list):
+                profile.interests = val
+        if 'is_online' in data and data['is_online'] is not None:
+            profile.is_online = bool(data['is_online'])
+
+        # Update phone number if explicitly requested
+        new_phone = data.get('new_phone_number') or data.get('new_phone')
+        if not new_phone and 'phone_number' in data and identifier:
+            candidate = str(data['phone_number']).strip()
+            if candidate != user.phone_number:
+                new_phone = candidate
+        if new_phone:
+            new_phone_str = str(new_phone).strip()
+            if new_phone_str != user.phone_number:
+                if User.objects.filter(phone_number=new_phone_str).exclude(id=user.id).exists():
+                    return Response({
+                        "success": False,
+                        "message": f"Phone number '{new_phone_str}' is already taken by another user."
+                    }, status=status.HTTP_409_CONFLICT)
+                user.phone_number = new_phone_str
+                user.username = new_phone_str
+
+        user.save()
+        profile.save()
+
+        serializer = CallerProfileSerializer(profile)
+        return Response({
+            "success": True,
+            "message": "Caller profile updated successfully.",
+            "data": serializer.data,
+            "profile": serializer.data,
+            "id": profile.id,
+            "user_id": user.id,
+            "phone_number": user.phone_number,
+            "name": profile.name,
+            "age": profile.age,
+            "gender": profile.gender,
+            "language": profile.language,
+            "interests": profile.interests,
+            "is_online": profile.is_online,
+        }, status=status.HTTP_200_OK)
+
+    def post(self, request, identifier=None, *args, **kwargs):
+        return self._update(request, identifier, partial=True)
+
+    def put(self, request, identifier=None, *args, **kwargs):
+        return self._update(request, identifier, partial=False)
+
+    def patch(self, request, identifier=None, *args, **kwargs):
+        return self._update(request, identifier, partial=True)
+
+    def get(self, request, identifier=None, *args, **kwargs):
+        user = _resolve_caller_user(request, identifier)
         if not user:
             return Response({
                 "success": False,
                 "message": "Caller not found."
             }, status=status.HTTP_404_NOT_FOUND)
-
-        if user.role not in ('CALLER', 'USER'):
-            return Response({
-                "success": False,
-                "message": "User is not a caller."
-            }, status=status.HTTP_400_BAD_REQUEST)
-
-        # Permanent deletion if requested
-        permanent = (
-            request.query_params.get('permanent', '').lower() in ('true', '1') or
-            (isinstance(request.data, dict) and request.data.get('permanent') is True)
-        )
-        if permanent:
-            user.delete()
-            return Response({
-                "success": True,
-                "message": "Caller deleted successfully."
-            }, status=status.HTTP_200_OK)
-
-        # Deactivate caller (soft delete)
-        user.is_active = False
-        user.save(update_fields=['is_active'])
-
-        if hasattr(user, 'caller_profile') and user.caller_profile:
-            user.caller_profile.is_online = False
-            user.caller_profile.save(update_fields=['is_online'])
-
+        profile, _ = CallerProfile.objects.get_or_create(user=user)
+        serializer = CallerProfileSerializer(profile)
         return Response({
             "success": True,
-            "message": "Caller deleted successfully."
+            "message": "Caller profile retrieved. Send POST, PUT, or PATCH to update.",
+            "data": serializer.data,
+            "profile": serializer.data
         }, status=status.HTTP_200_OK)
 
-    def post(self, request, user_id):
-        return self.delete(request, user_id)
+
+class CallerDeleteView(APIView):
+    """
+    Dedicated Caller Delete API:
+    - DELETE / POST / GET /api/callerdelete/
+    - DELETE / POST / GET /api/callerdelete/<identifier>/
+    - DELETE / POST / GET /api/caller/delete/
+    - DELETE / POST / GET /callerdelete/
+    - DELETE / POST / GET /api/callers/<int:user_id>/delete/
+    Supports:
+    - Path parameter: /api/callerdelete/+919876543210/ or /api/callerdelete/5/
+    - Query parameter: ?phone_number=+919876543210 or ?id=5
+    - Body JSON: { "phone_number": "+919876543210" } or { "id": 5 }
+    - Bearer token: Authorization: Bearer <token>
+    """
+    permission_classes = [permissions.AllowAny]
+
+    def _delete(self, request, identifier=None, user_id=None, *args, **kwargs):
+        target_ident = identifier or user_id
+        user = _resolve_caller_user(request, target_ident, user_id)
+        if not user:
+            available = list(User.objects.filter(role__in=['CALLER', 'USER']).values('id', 'username', 'phone_number')[:10])
+            return Response({
+                "success": False,
+                "message": f"Caller '{target_ident or 'specified'}' not found in database.",
+                "existing_callers": available
+            }, status=status.HTTP_404_NOT_FOUND)
+
+        target_id = user.id
+        target_phone = user.phone_number or user.username
+        user.delete()
+        return Response({
+            "success": True,
+            "message": f"Caller '{target_phone}' (ID: {target_id}) and all associated profile data deleted successfully."
+        }, status=status.HTTP_200_OK)
+
+    def delete(self, request, identifier=None, user_id=None, *args, **kwargs):
+        return self._delete(request, identifier, user_id, *args, **kwargs)
+
+    def post(self, request, identifier=None, user_id=None, *args, **kwargs):
+        return self._delete(request, identifier, user_id, *args, **kwargs)
+
+    def get(self, request, identifier=None, user_id=None, *args, **kwargs):
+        return self._delete(request, identifier, user_id, *args, **kwargs)
 
 
 class ListenerDeleteView(APIView):

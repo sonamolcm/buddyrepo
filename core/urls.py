@@ -25,6 +25,11 @@ from .views import (  # type: ignore
     # Caller Profile
     ProfileView,
     CallerProfileView,
+    # My Account Wallet & Account Deletion
+    WalletView,
+    GetCoinsView,
+    AddCoinsView,
+    CallerAccountDeleteView,
     # Metadata Dropdowns
     LanguageListView,
     InterestListView,
@@ -46,6 +51,7 @@ from .views import (  # type: ignore
     # Complete Caller & Listener CRUD
     CallerListCreateView,
     CallerDetailView,
+    CallerUpdateView,
     CallerDeleteView,
     CallerDeleteDirectView,
     ListenerListCreateView,
@@ -101,6 +107,10 @@ urlpatterns = [
     path('auth/listener/logout', ListenerLogoutView.as_view(), name='listener-logout-noslash'),
     path('listener/logout/', ListenerLogoutView.as_view(), name='listener-logout-short'),
     path('listener/logout', ListenerLogoutView.as_view(), name='listener-logout-short-noslash'),
+    path('listenerlogout/', ListenerLogoutView.as_view(), name='listener-logout-joined'),
+    path('listenerlogout', ListenerLogoutView.as_view()),
+    path('listener-logout/', ListenerLogoutView.as_view()),
+    path('listener-logout', ListenerLogoutView.as_view()),
 
     # ==========================================
     # 3.1 GENERAL LOGOUT FLOW
@@ -168,6 +178,28 @@ urlpatterns = [
     path('caller-profile/delete', DeleteAccountView.as_view()),
 
     # ==========================================
+    # 5.1 MY ACCOUNT: WALLET & COINS (GET & ADD)
+    # ==========================================
+    path('wallet/', WalletView.as_view(), name='wallet-balance'),
+    path('wallet', WalletView.as_view()),
+    path('wallet/coins/', GetCoinsView.as_view()),
+    path('wallet/coins', GetCoinsView.as_view()),
+    path('coins/', GetCoinsView.as_view(), name='coins-get'),
+    path('coins', GetCoinsView.as_view()),
+    path('get-coins/', GetCoinsView.as_view(), name='coins-get-alias'),
+    path('get-coins', GetCoinsView.as_view()),
+    path('getcoins/', GetCoinsView.as_view()),
+    path('getcoins', GetCoinsView.as_view()),
+    path('coins/add/', AddCoinsView.as_view(), name='coins-add'),
+    path('coins/add', AddCoinsView.as_view()),
+    path('add-coins/', AddCoinsView.as_view(), name='coins-add-alias'),
+    path('add-coins', AddCoinsView.as_view()),
+    path('addcoins/', AddCoinsView.as_view()),
+    path('addcoins', AddCoinsView.as_view()),
+    path('caller/account/', CallerAccountDeleteView.as_view(), name='caller-account-delete'),
+    path('caller/account', CallerAccountDeleteView.as_view()),
+
+    # ==========================================
     # 6. METADATA DROPDOWNS (LANGUAGES, INTERESTS & CATEGORIES)
     # ==========================================
     path('languages/', LanguageListView.as_view(), name='language-list'),
@@ -218,6 +250,34 @@ urlpatterns = [
     path('callers/<str:identifier>', CallerDetailView.as_view()),
     path('callers/<str:identifier>/delete/', CallerDeleteDirectView.as_view(), name='caller-detail-delete'),
     path('callers/<str:identifier>/delete', CallerDeleteDirectView.as_view()),
+
+    # Dedicated Caller Update routes (all aliases)
+    path('callerupdate/', CallerUpdateView.as_view(), name='caller-update-root'),
+    path('callerupdate', CallerUpdateView.as_view()),
+    path('callerupdate/<str:identifier>/', CallerUpdateView.as_view()),
+    path('callerupdate/<str:identifier>', CallerUpdateView.as_view()),
+    path('caller-update/', CallerUpdateView.as_view()),
+    path('caller-update', CallerUpdateView.as_view()),
+    path('caller-update/<str:identifier>/', CallerUpdateView.as_view()),
+    path('caller-update/<str:identifier>', CallerUpdateView.as_view()),
+    path('caller/update/', CallerUpdateView.as_view(), name='caller-update-short'),
+    path('caller/update', CallerUpdateView.as_view()),
+    path('caller/update/<str:identifier>/', CallerUpdateView.as_view()),
+    path('caller/update/<str:identifier>', CallerUpdateView.as_view()),
+
+    # Dedicated Caller Delete routes (all aliases)
+    path('callerdelete/', CallerDeleteView.as_view(), name='caller-delete-root'),
+    path('callerdelete', CallerDeleteView.as_view()),
+    path('callerdelete/<str:identifier>/', CallerDeleteView.as_view()),
+    path('callerdelete/<str:identifier>', CallerDeleteView.as_view()),
+    path('caller-delete/', CallerDeleteView.as_view()),
+    path('caller-delete', CallerDeleteView.as_view()),
+    path('caller-delete/<str:identifier>/', CallerDeleteView.as_view()),
+    path('caller-delete/<str:identifier>', CallerDeleteView.as_view()),
+    path('caller/delete/', CallerDeleteView.as_view(), name='caller-delete-short'),
+    path('caller/delete', CallerDeleteView.as_view()),
+    path('caller/delete/<str:identifier>/', CallerDeleteView.as_view()),
+    path('caller/delete/<str:identifier>', CallerDeleteView.as_view()),
 
     # ==========================================
     # 9. COMPLETE CRUD FOR LISTENERS

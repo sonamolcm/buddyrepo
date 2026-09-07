@@ -7,6 +7,9 @@ from .models import (
     ListenerProfile,
     OTPVerification,
     Category,
+    Wallet,
+    Call,
+    CallReview,
 )
 
 
@@ -30,7 +33,7 @@ class CallerSignupSendOTPSerializer(serializers.Serializer):
 
 class CallerSignupVerifyOTPSerializer(serializers.Serializer):
     phone_number = serializers.CharField(max_length=17)
-    otp = serializers.CharField(min_length=6, max_length=6)
+    otp = serializers.CharField(min_length=4, max_length=10)
 
 
 class CallerSignupCompleteProfileSerializer(serializers.Serializer):
@@ -173,6 +176,12 @@ class ListenerLoginSerializer(serializers.Serializer):
 class CallerProfileSerializer(serializers.ModelSerializer):
     phone_number = serializers.CharField(source='user.phone_number', read_only=True)
     user_id = serializers.IntegerField(source='user.id', read_only=True)
+    profession = serializers.SerializerMethodField()
+    location = serializers.SerializerMethodField()
+    bio = serializers.SerializerMethodField()
+    matches_count = serializers.SerializerMethodField()
+    voice_calls_count = serializers.SerializerMethodField()
+    rating = serializers.SerializerMethodField()
 
     class Meta:
         model = CallerProfile
@@ -180,23 +189,71 @@ class CallerProfileSerializer(serializers.ModelSerializer):
             'id',
             'user_id',
             'phone_number',
+            'profile_picture',
             'name',
             'age',
+            'profession',
+            'location',
+            'bio',
+            'interests',
+            'matches_count',
+            'voice_calls_count',
+            'rating',
             'gender',
             'language',
-            'interests',
-            'profile_picture',
             'is_online',
             'created_at',
             'updated_at',
         )
 
+    def get_profession(self, obj):
+        # Note: Profession is defined on BuddyProfile, not in CallerProfile model
+        return None
+
+    def get_location(self, obj):
+        # Note: Location field does not exist in the database model
+        return None
+
+    def get_bio(self, obj):
+        # Note: Bio is defined on BuddyProfile, not in CallerProfile model
+        return None
+
+    def get_matches_count(self, obj):
+        # Note: Matches feature/model does not exist in the project
+        return None
+
+    def get_voice_calls_count(self, obj):
+        try:
+            return Call.objects.filter(caller=obj.user, call_type='AUDIO').count()
+        except Exception:
+            return 0
+
+    def get_rating(self, obj):
+        try:
+            from django.db.models import Avg
+            avg = CallReview.objects.filter(call__caller=obj.user).aggregate(Avg('rating'))['rating__avg']
+            return round(float(avg), 1) if avg is not None else 5.0
+        except Exception:
+            return 5.0
+
     def update(self, instance, validated_data):
         instance = super().update(instance, validated_data)
+        user_updated = False
         if 'name' in validated_data and validated_data['name']:
             instance.user.first_name = validated_data['name']
-            instance.user.save(update_fields=['first_name'])
+            user_updated = True
+        if 'age' in validated_data and validated_data['age'] is not None:
+            instance.user.age = validated_data['age']
+            user_updated = True
+        if user_updated:
+            instance.user.save()
         return instance
+
+
+class WalletSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Wallet
+        fields = ('balance',)
 
 
 class ListenerProfileSerializer(serializers.ModelSerializer):
