@@ -61,6 +61,8 @@ from core.views import (
     CallHistoryView,
     CallDetailView,
     CallerAccountDeleteView,
+    CallerFavoritesView,
+    CallerFavoriteDetailView,
 )
 from core.caller_views import app_home_view, admin_panel_view
 
@@ -512,6 +514,36 @@ urlpatterns = [
     path('api/caller/account', CallerAccountDeleteView.as_view()),
     path('caller/account/', CallerAccountDeleteView.as_view()),
     path('caller/account', CallerAccountDeleteView.as_view()),
+
+    # Caller Favorites endpoints
+    path('api/favourites/', CallerFavoritesView.as_view(), name='api-caller-favourites'),
+    path('api/favourites', CallerFavoritesView.as_view()),
+    path('api/favourites/<int:agent_id>/', CallerFavoriteDetailView.as_view(), name='api-caller-favourite-detail'),
+    path('api/favourites/<int:agent_id>', CallerFavoriteDetailView.as_view()),
+    path('favourites/', CallerFavoritesView.as_view()),
+    path('favourites', CallerFavoritesView.as_view()),
+    path('favourites/<int:agent_id>/', CallerFavoriteDetailView.as_view()),
+    path('favourites/<int:agent_id>', CallerFavoriteDetailView.as_view()),
+
+    # American spelling aliases
+    path('api/favorites/', CallerFavoritesView.as_view(), name='api-caller-favorites'),
+    path('api/favorites', CallerFavoritesView.as_view()),
+    path('api/favorites/<int:agent_id>/', CallerFavoriteDetailView.as_view(), name='api-caller-favorite-detail'),
+    path('api/favorites/<int:agent_id>', CallerFavoriteDetailView.as_view()),
+    path('favorites/', CallerFavoritesView.as_view()),
+    path('favorites', CallerFavoritesView.as_view()),
+    path('favorites/<int:agent_id>/', CallerFavoriteDetailView.as_view()),
+    path('favorites/<int:agent_id>', CallerFavoriteDetailView.as_view()),
+
+    # Double-prefix safety
+    path('api/api/favourites/', CallerFavoritesView.as_view()),
+    path('api/api/favourites', CallerFavoritesView.as_view()),
+    path('api/api/favourites/<int:agent_id>/', CallerFavoriteDetailView.as_view()),
+    path('api/api/favourites/<int:agent_id>', CallerFavoriteDetailView.as_view()),
+    path('api/api/favorites/', CallerFavoritesView.as_view()),
+    path('api/api/favorites', CallerFavoritesView.as_view()),
+    path('api/api/favorites/<int:agent_id>/', CallerFavoriteDetailView.as_view()),
+    path('api/api/favorites/<int:agent_id>', CallerFavoriteDetailView.as_view()),
 
     path('api/callerprofileview/', CallerProfileView.as_view(), name='api-callerprofileview'),
     path('api/callerprofileview', CallerProfileView.as_view()),

@@ -10,6 +10,7 @@ from .models import (
     Wallet,
     Call,
     CallReview,
+    CallerFavorite,
 )
 
 
@@ -357,6 +358,7 @@ class CallHistorySerializer(serializers.ModelSerializer):
     is_incoming = serializers.SerializerMethodField()
     duration_formatted = serializers.SerializerMethodField()
     review = serializers.SerializerMethodField()
+    is_favorite = serializers.SerializerMethodField()
 
     class Meta:
         model = Call
@@ -387,6 +389,7 @@ class CallHistorySerializer(serializers.ModelSerializer):
             'duration_formatted',
             'coins_deducted',
             'review',
+            'is_favorite',
             'created_at',
         )
 
@@ -573,6 +576,74 @@ class CallHistorySerializer(serializers.ModelSerializer):
         minutes = total_secs // 60
         seconds = total_secs % 60
         return f"{minutes:02d}:{seconds:02d}"
+
+    def get_is_favorite(self, obj):
+        current_user = self.context.get('current_user')
+        if not current_user or not getattr(current_user, 'is_caller', False):
+            return False
+        favorite_agent_ids = self.context.get('favorite_agent_ids')
+        if favorite_agent_ids is not None:
+            return getattr(obj, 'receiver_id', None) in favorite_agent_ids
+        try:
+            return CallerFavorite.objects.filter(caller=current_user, agent_id=getattr(obj, 'receiver_id', None)).exists()
+        except Exception:
+            return False
+
+
+class CallerFavoriteSerializer(serializers.ModelSerializer):
+    """
+    Serializer for Caller Favorites:
+    - agent_id: int
+    - name: str
+    - category: str
+    - rating: float
+    """
+    agent_id = serializers.ReadOnlyField(source='agent.id')
+    name = serializers.SerializerMethodField()
+    category = serializers.SerializerMethodField()
+    rating = serializers.SerializerMethodField()
+
+    class Meta:
+        model = CallerFavorite
+        fields = ('agent_id', 'name', 'category', 'rating')
+
+    def get_name(self, obj):
+        agent = getattr(obj, 'agent', None)
+        if not agent:
+            return ""
+        if hasattr(agent, 'listener_profile') and getattr(agent.listener_profile, 'name', None):
+            return agent.listener_profile.name
+        if hasattr(agent, 'caller_profile') and getattr(agent.caller_profile, 'name', None):
+            return agent.caller_profile.name
+        return agent.get_full_name() or agent.username
+
+    def get_category(self, obj):
+        agent = getattr(obj, 'agent', None)
+        if not agent:
+            return "General"
+        try:
+            if hasattr(agent, 'buddy_profile') and agent.buddy_profile and agent.buddy_profile.profession:
+                return agent.buddy_profile.profession.name
+        except Exception:
+            pass
+        try:
+            cat_name = Call.objects.filter(receiver=agent, category__isnull=False).values_list('category__name', flat=True).first()
+            if cat_name:
+                return cat_name
+        except Exception:
+            pass
+        return "General"
+
+    def get_rating(self, obj):
+        agent = getattr(obj, 'agent', None)
+        if not agent:
+            return 5.0
+        try:
+            if hasattr(agent, 'buddy_profile') and agent.buddy_profile and agent.buddy_profile.rating:
+                return float(agent.buddy_profile.rating)
+        except Exception:
+            pass
+        return 5.0
 
 
 class CallRequestSerializer(serializers.Serializer):

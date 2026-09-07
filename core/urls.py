@@ -38,6 +38,8 @@ from .views import (  # type: ignore
     CallHistoryView,
     CallDetailView,
     CallerAccountDeleteView,
+    CallerFavoritesView,
+    CallerFavoriteDetailView,
     # Metadata Dropdowns
     LanguageListView,
     InterestListView,
@@ -260,6 +262,16 @@ urlpatterns = [
 
     path('caller/account/', CallerAccountDeleteView.as_view(), name='caller-account-delete'),
     path('caller/account', CallerAccountDeleteView.as_view()),
+
+    # Caller Favorites
+    path('favourites/', CallerFavoritesView.as_view(), name='caller-favourites'),
+    path('favourites', CallerFavoritesView.as_view()),
+    path('favourites/<int:agent_id>/', CallerFavoriteDetailView.as_view(), name='caller-favourite-detail'),
+    path('favourites/<int:agent_id>', CallerFavoriteDetailView.as_view()),
+    path('favorites/', CallerFavoritesView.as_view(), name='caller-favorites'),
+    path('favorites', CallerFavoritesView.as_view()),
+    path('favorites/<int:agent_id>/', CallerFavoriteDetailView.as_view(), name='caller-favorite-detail'),
+    path('favorites/<int:agent_id>', CallerFavoriteDetailView.as_view()),
 
     # ==========================================
     # 6. METADATA DROPDOWNS (LANGUAGES, INTERESTS & CATEGORIES)

@@ -16,6 +16,7 @@ from .models import (
     Call,
     CallReview,
     Notification,
+    CallerFavorite,
 )
 
 # Admin Site Header Branding
@@ -211,3 +212,10 @@ class NotificationAdmin(admin.ModelAdmin):
     list_display = ('id', 'user', 'title', 'notification_type', 'is_read', 'created_at')
     list_filter = ('notification_type', 'is_read', 'created_at')
     search_fields = ('user__username', 'title', 'message')
+
+
+@admin.register(CallerFavorite)
+class CallerFavoriteAdmin(admin.ModelAdmin):
+    list_display = ('id', 'caller', 'agent', 'created_at')
+    list_filter = ('created_at',)
+    search_fields = ('caller__username', 'caller__phone_number', 'agent__username', 'agent__phone_number')

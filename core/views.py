@@ -33,6 +33,7 @@ from .models import (  # type: ignore
     WalletTransaction,
     Call,
     CallReview,
+    CallerFavorite,
 )
 from .permissions import IsAdminUser, IsCallerUser  # type: ignore
 # pyrefly: ignore [missing-import]
@@ -53,6 +54,7 @@ from .serializers import (  # type: ignore
     LogoutSerializer,
     CallerProfileSerializer,
     CallerPrivacySettingsSerializer,
+    CallerFavoriteSerializer,
     ListenerProfileSerializer,
     UserDetailSerializer,
     CategorySerializer,
@@ -1971,6 +1973,13 @@ class CallHistoryView(APIView):
                 logger.error("Call history query failed: %s", e2)
                 calls = []
 
+        favorite_agent_ids = set()
+        if getattr(user, 'is_caller', False):
+            try:
+                favorite_agent_ids = set(CallerFavorite.objects.filter(caller=user).values_list('agent_id', flat=True))
+            except Exception:
+                pass
+
         formatted_calls = []
         for c in calls:
             cat_name = "General"
@@ -1980,20 +1989,37 @@ class CallHistoryView(APIView):
             except Exception:
                 cat_name = "General"
 
+            agent_user = getattr(c, 'receiver', None)
+            agent_name = ""
+            if agent_user:
+                if hasattr(agent_user, 'listener_profile') and getattr(agent_user.listener_profile, 'name', None):
+                    agent_name = agent_user.listener_profile.name
+                elif hasattr(agent_user, 'caller_profile') and getattr(agent_user.caller_profile, 'name', None):
+                    agent_name = agent_user.caller_profile.name
+                else:
+                    agent_name = agent_user.get_full_name() or agent_user.username
+
+            is_fav = bool(agent_user and agent_user.id in favorite_agent_ids)
+
             formatted_calls.append({
                 "id": c.id,
+                "agent": {
+                    "id": agent_user.id if agent_user else None,
+                    "name": agent_name
+                },
                 "category": cat_name,
                 "status": getattr(c, 'status', 'COMPLETED'),
                 "start_time": getattr(c, 'started_at', None),
                 "end_time": getattr(c, 'ended_at', None),
-                "duration": getattr(c, 'duration_seconds', 0)
+                "duration": getattr(c, 'duration_seconds', 0),
+                "is_favorite": is_fav
             })
 
         try:
             serializer = CallHistorySerializer(
                 calls,
                 many=True,
-                context={'request': request, 'current_user': user}
+                context={'request': request, 'current_user': user, 'favorite_agent_ids': favorite_agent_ids}
             )
             serialized_data = serializer.data
         except Exception as e:
@@ -2198,6 +2224,140 @@ class CallerAccountDeleteView(APIView):
 
     def post(self, request, *args, **kwargs):
         return self.delete(request, *args, **kwargs)
+
+
+# ===================================================
+# CALLER FAVORITE AGENTS VIEWS
+# ===================================================
+class CallerFavoritesView(APIView):
+    """
+    Caller Favorites API:
+    - GET  /api/favourites/ : Retrieve authenticated caller's list of favorite agents.
+    - POST /api/favourites/ : Add an agent to caller's favorites (agent must have had a previous call with caller).
+
+    Requirements:
+    - JWT authentication required.
+    - Caller only (403 for listeners/agents, 401 unauthenticated).
+    - Previous call validation: Caller must have had a completed/previous call with the Agent.
+    - No self-favoriting.
+    - No duplicate favorites.
+    """
+    permission_classes = [permissions.IsAuthenticated, IsCallerUser]
+
+    def get(self, request, *args, **kwargs):
+        caller = request.user
+        if not getattr(caller, 'is_caller', False):
+            return Response({
+                "detail": "Access restricted to Caller accounts only."
+            }, status=status.HTTP_403_FORBIDDEN)
+
+        favorites = CallerFavorite.objects.filter(caller=caller).select_related('agent', 'agent__listener_profile', 'agent__buddy_profile')
+        serializer = CallerFavoriteSerializer(favorites, many=True, context={'request': request})
+        return Response({
+            "success": True,
+            "favourites": serializer.data
+        }, status=status.HTTP_200_OK)
+
+    def post(self, request, *args, **kwargs):
+        caller = request.user
+        if not getattr(caller, 'is_caller', False):
+            return Response({
+                "detail": "Access restricted to Caller accounts only."
+            }, status=status.HTTP_403_FORBIDDEN)
+
+        data = request.data
+        if not isinstance(data, dict):
+            return Response({
+                "success": False,
+                "message": "Invalid payload format. JSON object required."
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        agent_id = data.get('agent_id')
+        if not agent_id:
+            return Response({
+                "success": False,
+                "message": "agent_id is required."
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            agent_id = int(agent_id)
+        except (ValueError, TypeError):
+            return Response({
+                "success": False,
+                "message": "agent_id must be an integer."
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        if caller.id == agent_id:
+            return Response({
+                "success": False,
+                "message": "You cannot add yourself to favorites."
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        agent = User.objects.filter(id=agent_id, is_active=True).first()
+        if not agent:
+            return Response({
+                "success": False,
+                "message": f"Agent #{agent_id} not found or inactive."
+            }, status=status.HTTP_404_NOT_FOUND)
+
+        if getattr(agent, 'is_caller', False) and not getattr(agent, 'is_listener', False):
+            return Response({
+                "success": False,
+                "message": "The selected user is a Caller, not an Agent/Listener."
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        # Previous call validation: confirm caller has had a previous call with this agent
+        has_previous_call = Call.objects.filter(
+            caller=caller,
+            receiver=agent
+        ).exists()
+
+        if not has_previous_call:
+            return Response({
+                "success": False,
+                "message": "You can only favorite an agent you have previously called."
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        # Duplicate check
+        if CallerFavorite.objects.filter(caller=caller, agent=agent).exists():
+            return Response({
+                "success": False,
+                "message": "Agent is already in your favorites."
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        CallerFavorite.objects.create(caller=caller, agent=agent)
+        return Response({
+            "success": True,
+            "message": "Agent added to favorites."
+        }, status=status.HTTP_201_CREATED)
+
+
+class CallerFavoriteDetailView(APIView):
+    """
+    Remove Favorite API:
+    - DELETE /api/favourites/<int:agent_id>/ : Remove agent from caller's favorites.
+    """
+    permission_classes = [permissions.IsAuthenticated, IsCallerUser]
+
+    def delete(self, request, agent_id, *args, **kwargs):
+        caller = request.user
+        if not getattr(caller, 'is_caller', False):
+            return Response({
+                "detail": "Access restricted to Caller accounts only."
+            }, status=status.HTTP_403_FORBIDDEN)
+
+        favorite = CallerFavorite.objects.filter(caller=caller, agent_id=agent_id).first()
+        if not favorite:
+            return Response({
+                "success": False,
+                "message": f"Agent #{agent_id} is not in your favorites."
+            }, status=status.HTTP_404_NOT_FOUND)
+
+        favorite.delete()
+        return Response({
+            "success": True,
+            "message": "Agent removed from favorites."
+        }, status=status.HTTP_200_OK)
 
 
 class DeleteAccountView(APIView):
