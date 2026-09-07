@@ -242,27 +242,34 @@ class WalletTransaction(models.Model):
         return f"{self.transaction_type}: {self.amount} coins ({self.wallet.user.username})"
 
 
-# Signal: Auto-create Profile whenever a User is created
+# Signal: Auto-create Profile whenever a User is created or updated
 @receiver(post_save, sender=User)
 def create_related_profile(sender, instance, created, **kwargs):
-    if created:
-        if instance.role in ('CALLER', 'USER'):
-            CallerProfile.objects.get_or_create(
-                user=instance,
-                defaults={
-                    'name': instance.first_name or instance.username,
-                    'age': instance.age,
-                    'gender': instance.gender,
-                }
-            )
-        elif instance.role in ('LISTENER', 'BUDDY'):
-            ListenerProfile.objects.get_or_create(
-                user=instance,
-                defaults={
-                    'listener_id': instance.username,
-                    'language': 'English',
-                }
-            )
+    if instance.role in ('CALLER', 'USER'):
+        CallerProfile.objects.get_or_create(
+            user=instance,
+            defaults={
+                'name': instance.first_name or instance.username,
+                'age': instance.age,
+                'gender': instance.gender,
+            }
+        )
+    elif instance.role in ('LISTENER', 'BUDDY'):
+        profile, _ = ListenerProfile.objects.get_or_create(
+            user=instance,
+            defaults={
+                'listener_id': instance.username,
+                'name': instance.first_name or instance.username,
+                'language': 'English',
+                'gender': instance.gender or 'Other',
+                'interests': ["Friendly Chat", "Emotional Support"],
+                'is_available': True,
+            }
+        )
+        # Ensure listener_id matches username if empty
+        if not profile.listener_id:
+            profile.listener_id = instance.username
+            profile.save(update_fields=['listener_id'])
 
 
 # ==========================================

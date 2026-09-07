@@ -16,6 +16,8 @@ from .views import (  # type: ignore
     # Listener Login Flow
     ListenerLoginView,
     # Logout Flow
+    CallerLogoutView,
+    ListenerLogoutView,
     LogoutView,
     # Account Deletion Flow
     DeleteAccountView,
@@ -26,6 +28,10 @@ from .views import (  # type: ignore
     InterestListView,
     CategoryListCreateView,
     CategoryDetailView,
+    # Legal & Helpline
+    TermsAndConditionsView,
+    PrivacyPolicyView,
+    HelplineView,
     # Web Simulator & Web Auth Compatibility Views
     WebSendOTPView,
     WebVerifyOTPView,
@@ -63,21 +69,29 @@ urlpatterns = [
     path('auth/caller/signup/complete-profile/', CallerSignupCompleteProfileView.as_view(), name='caller-signup-complete-profile'),
 
     # ==========================================
-    # 2. CALLER LOGIN FLOW
+    # 2. CALLER LOGIN & LOGOUT FLOW
     # ==========================================
     path('auth/caller/login/send-otp/', CallerLoginSendOTPView.as_view(), name='caller-login-send-otp'),
     path('auth/caller/login/verify-otp/', CallerLoginVerifyOTPView.as_view(), name='caller-login-verify-otp'),
+    path('auth/caller/logout/', CallerLogoutView.as_view(), name='caller-logout'),
+    path('auth/caller/logout', CallerLogoutView.as_view(), name='caller-logout-noslash'),
+    path('caller/logout/', CallerLogoutView.as_view(), name='caller-logout-short'),
+    path('caller/logout', CallerLogoutView.as_view(), name='caller-logout-short-noslash'),
 
     # ==========================================
-    # 3. LISTENER LOGIN FLOW
+    # 3. LISTENER LOGIN & LOGOUT FLOW
     # ==========================================
     path('auth/listener/login/', ListenerLoginView.as_view(), name='listener-login'),
     path('auth/listener/login', ListenerLoginView.as_view(), name='listener-login-noslash'),
     path('listener/login/', ListenerLoginView.as_view(), name='listener-login-short'),
     path('listener/login', ListenerLoginView.as_view(), name='listener-login-short-noslash'),
+    path('auth/listener/logout/', ListenerLogoutView.as_view(), name='listener-logout'),
+    path('auth/listener/logout', ListenerLogoutView.as_view(), name='listener-logout-noslash'),
+    path('listener/logout/', ListenerLogoutView.as_view(), name='listener-logout-short'),
+    path('listener/logout', ListenerLogoutView.as_view(), name='listener-logout-short-noslash'),
 
     # ==========================================
-    # 3.1 LOGOUT FLOW
+    # 3.1 GENERAL LOGOUT FLOW
     # ==========================================
     path('auth/logout/', LogoutView.as_view(), name='auth-logout'),
     path('auth/logout', LogoutView.as_view(), name='auth-logout-noslash'),
@@ -120,6 +134,24 @@ urlpatterns = [
     path('categories', CategoryListCreateView.as_view()),
     path('categories/<int:id>/', CategoryDetailView.as_view(), name='category-detail'),
     path('categories/<int:id>', CategoryDetailView.as_view()),
+
+    # ==========================================
+    # 6.1 APP LEGAL & SUPPORT (TERMS, PRIVACY, HELPLINE)
+    # ==========================================
+    path('terms/', TermsAndConditionsView.as_view(), name='terms-and-conditions'),
+    path('terms', TermsAndConditionsView.as_view()),
+    path('terms-and-conditions/', TermsAndConditionsView.as_view()),
+    path('terms-and-conditions', TermsAndConditionsView.as_view()),
+
+    path('privacy/', PrivacyPolicyView.as_view(), name='privacy-policy'),
+    path('privacy', PrivacyPolicyView.as_view()),
+    path('privacy-policy/', PrivacyPolicyView.as_view()),
+    path('privacy-policy', PrivacyPolicyView.as_view()),
+
+    path('helpline/', HelplineView.as_view(), name='helpline'),
+    path('helpline', HelplineView.as_view()),
+    path('support/', HelplineView.as_view(), name='support'),
+    path('support', HelplineView.as_view()),
 
 
     # ==========================================

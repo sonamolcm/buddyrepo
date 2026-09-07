@@ -18,7 +18,7 @@ class ListenerProfileInline(admin.StackedInline):
     verbose_name_plural = 'Listener Profile Details'
     fk_name = 'user'
     extra = 0
-    fields = ('listener_id', 'language', 'is_available')
+    fields = ('listener_id', 'name', 'gender', 'language', 'interests', 'profile_picture', 'is_available')
 
 
 class CallerProfileInline(admin.StackedInline):
@@ -108,17 +108,25 @@ class CallerProfileAdmin(admin.ModelAdmin):
 
 @admin.register(ListenerProfile)
 class ListenerProfileAdmin(admin.ModelAdmin):
-    list_display = ('listener_id', 'get_username', 'language', 'is_available', 'get_is_active', 'created_at')
-    list_filter = ('language', 'is_available', 'user__is_active')
-    search_fields = ('listener_id', 'user__username')
+    list_display = ('listener_id', 'get_name', 'get_username', 'gender', 'language', 'is_available', 'get_is_active', 'created_at')
+    list_filter = ('language', 'gender', 'is_available', 'user__is_active')
+    search_fields = ('listener_id', 'name', 'user__username')
     list_editable = ('is_available',)
-    fields = ('user', 'listener_id', 'language', 'is_available')
+    fields = ('user', 'listener_id', 'name', 'gender', 'language', 'interests', 'profile_picture', 'is_available')
 
     def save_model(self, request, form, change):
         super().save_model(request, form, change)
-        if form.instance.user and form.instance.user.role != 'LISTENER':
-            form.instance.user.role = 'LISTENER'
-            form.instance.user.save(update_fields=['role'])
+        if form.instance.user:
+            if form.instance.user.role != 'LISTENER':
+                form.instance.user.role = 'LISTENER'
+                form.instance.user.save(update_fields=['role'])
+            if not form.instance.user.is_profile_completed:
+                form.instance.user.is_profile_completed = True
+                form.instance.user.save(update_fields=['is_profile_completed'])
+
+    def get_name(self, obj):
+        return obj.name or obj.user.first_name or obj.user.username
+    get_name.short_description = 'Name'
 
     def get_username(self, obj):
         return obj.user.username

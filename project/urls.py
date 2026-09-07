@@ -26,6 +26,8 @@ from django.conf.urls.static import static
 
 from core.views import (
     ListenerLoginView,
+    CallerLogoutView,
+    ListenerLogoutView,
     LogoutView,
     DeleteAccountView,
     AdminCreateListenerView,
@@ -39,6 +41,9 @@ from core.views import (
     ListenerDetailView,
     ListenerDeleteView,
     ListenerDeleteDirectView,
+    TermsAndConditionsView,
+    PrivacyPolicyView,
+    HelplineView,
 )
 
 urlpatterns = [
@@ -139,6 +144,26 @@ urlpatterns = [
     path('login/', ListenerLoginView.as_view()),
     path('login', ListenerLoginView.as_view()),
 
+    # Caller logout aliases
+    path('api/auth/caller/logout/', CallerLogoutView.as_view(), name='api-auth-caller-logout'),
+    path('api/auth/caller/logout', CallerLogoutView.as_view()),
+    path('auth/caller/logout/', CallerLogoutView.as_view()),
+    path('auth/caller/logout', CallerLogoutView.as_view()),
+    path('api/caller/logout/', CallerLogoutView.as_view()),
+    path('api/caller/logout', CallerLogoutView.as_view()),
+    path('caller/logout/', CallerLogoutView.as_view()),
+    path('caller/logout', CallerLogoutView.as_view()),
+
+    # Listener logout aliases
+    path('api/auth/listener/logout/', ListenerLogoutView.as_view(), name='api-auth-listener-logout'),
+    path('api/auth/listener/logout', ListenerLogoutView.as_view()),
+    path('auth/listener/logout/', ListenerLogoutView.as_view()),
+    path('auth/listener/logout', ListenerLogoutView.as_view()),
+    path('api/listener/logout/', ListenerLogoutView.as_view()),
+    path('api/listener/logout', ListenerLogoutView.as_view()),
+    path('listener/logout/', ListenerLogoutView.as_view()),
+    path('listener/logout', ListenerLogoutView.as_view()),
+
     # General logout aliases
     path('api/auth/logout/', LogoutView.as_view(), name='api-auth-logout'),
     path('api/auth/logout', LogoutView.as_view()),
@@ -162,6 +187,42 @@ urlpatterns = [
     path('api/profile/delete', DeleteAccountView.as_view()),
     path('profile/delete/', DeleteAccountView.as_view()),
     path('profile/delete', DeleteAccountView.as_view()),
+
+    # ==========================================
+    # LEGAL & HELPLINE ROUTES
+    # ==========================================
+    path('api/helpline/', HelplineView.as_view(), name='api-helpline'),
+    path('api/helpline', HelplineView.as_view()),
+    path('api/api/helpline/', HelplineView.as_view()),
+    path('api/api/helpline', HelplineView.as_view()),
+    path('helpline/', HelplineView.as_view()),
+    path('helpline', HelplineView.as_view()),
+    path('api/support/', HelplineView.as_view()),
+    path('api/support', HelplineView.as_view()),
+    path('support/', HelplineView.as_view()),
+    path('support', HelplineView.as_view()),
+
+    path('api/terms-and-conditions/', TermsAndConditionsView.as_view(), name='api-terms-and-conditions'),
+    path('api/terms-and-conditions', TermsAndConditionsView.as_view()),
+    path('api/api/terms-and-conditions/', TermsAndConditionsView.as_view()),
+    path('api/api/terms-and-conditions', TermsAndConditionsView.as_view()),
+    path('terms-and-conditions/', TermsAndConditionsView.as_view()),
+    path('terms-and-conditions', TermsAndConditionsView.as_view()),
+    path('api/terms/', TermsAndConditionsView.as_view()),
+    path('api/terms', TermsAndConditionsView.as_view()),
+    path('terms/', TermsAndConditionsView.as_view()),
+    path('terms', TermsAndConditionsView.as_view()),
+
+    path('api/privacy-policy/', PrivacyPolicyView.as_view(), name='api-privacy-policy'),
+    path('api/privacy-policy', PrivacyPolicyView.as_view()),
+    path('api/api/privacy-policy/', PrivacyPolicyView.as_view()),
+    path('api/api/privacy-policy', PrivacyPolicyView.as_view()),
+    path('privacy-policy/', PrivacyPolicyView.as_view()),
+    path('privacy-policy', PrivacyPolicyView.as_view()),
+    path('api/privacy/', PrivacyPolicyView.as_view()),
+    path('api/privacy', PrivacyPolicyView.as_view()),
+    path('privacy/', PrivacyPolicyView.as_view()),
+    path('privacy', PrivacyPolicyView.as_view()),
 
     # Standard App routing
     path('api/', include('core.urls')),

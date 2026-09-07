@@ -34,6 +34,7 @@ from .serializers import (  # type: ignore
     CallerLoginSendOTPSerializer,
     CallerLoginVerifyOTPSerializer,
     ListenerLoginSerializer,
+    LogoutSerializer,
     CallerProfileSerializer,
     ListenerProfileSerializer,
     UserDetailSerializer,
@@ -359,6 +360,7 @@ class CallerLoginVerifyOTPView(APIView):
                 'gender': user.gender,
             }
         )
+        CallerProfile.objects.filter(user=user).update(is_online=True)
 
         refresh = RefreshToken.for_user(user)
 
@@ -428,6 +430,7 @@ class ListenerLoginView(APIView):
                 'language': 'English',
             }
         )
+        ListenerProfile.objects.filter(user=user).update(is_available=True)
 
         refresh = RefreshToken.for_user(user)
 
@@ -451,12 +454,118 @@ class ListenerLoginView(APIView):
         }, status=status.HTTP_200_OK)
 
 
+def _perform_logout(request, role=None):
+    """
+    Unified logout helper routine.
+    1. Blacklists JWT refresh token (if provided and blacklist support is available).
+    2. Resolves target user either from authenticated request.user or token payload user_id.
+    3. Sets online/availability status:
+       - Caller: CallerProfile.is_online = False
+       - Listener: ListenerProfile.is_available = False
+    4. Terminates Django session if active.
+    """
+    target_user = request.user if (request.user and request.user.is_authenticated) else None
+    refresh_token = request.data.get('refresh') or request.data.get('refresh_token')
+
+    if refresh_token:
+        try:
+            token = RefreshToken(refresh_token)
+            if not target_user:
+                user_id = token.get('user_id') or (token.payload.get('user_id') if hasattr(token, 'payload') else None)
+                if user_id:
+                    target_user = User.objects.filter(id=user_id).first()
+            token.blacklist()
+        except (AttributeError, TokenError):
+            pass
+        except Exception:
+            pass
+
+    if target_user:
+        if role in ('CALLER', None):
+            CallerProfile.objects.filter(user=target_user).update(is_online=False)
+        if role in ('LISTENER', None):
+            ListenerProfile.objects.filter(user=target_user).update(is_available=False)
+
+    try:
+        django_logout(request)
+    except Exception:
+        pass
+
+
+class CallerLogoutView(APIView):
+    """
+    Caller Logout API:
+    - Dedicated logout endpoint for Callers.
+    - Accepts POST request with optional Bearer token in Authorization header
+      and/or optional JSON body: {"refresh": "<refresh_token>"}.
+    - Blacklists the refresh token (if enabled).
+    - Sets CallerProfile.is_online = False.
+    - Flushes Django session.
+    """
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request):
+        return Response({
+            "success": True,
+            "message": "Caller Logout endpoint is active. Please send a POST request with optional JSON body: {\"refresh\": \"<refresh_token>\"} and/or Authorization: Bearer <access_token> header.",
+            "method": "POST",
+            "endpoint": "/api/auth/caller/logout/"
+        }, status=status.HTTP_200_OK)
+
+    def post(self, request):
+        try:
+            _perform_logout(request, role='CALLER')
+            return Response({
+                "success": True,
+                "message": "Caller logged out successfully."
+            }, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response({
+                "success": False,
+                "message": f"Caller logout failed: {str(e)}"
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+
+class ListenerLogoutView(APIView):
+    """
+    Listener Logout API:
+    - Dedicated logout endpoint for Listeners.
+    - Accepts POST request with optional Bearer token in Authorization header
+      and/or optional JSON body: {"refresh": "<refresh_token>"}.
+    - Blacklists the refresh token (if enabled).
+    - Sets ListenerProfile.is_available = False.
+    - Flushes Django session.
+    """
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request):
+        return Response({
+            "success": True,
+            "message": "Listener Logout endpoint is active. Please send a POST request with optional JSON body: {\"refresh\": \"<refresh_token>\"} and/or Authorization: Bearer <access_token> header.",
+            "method": "POST",
+            "endpoint": "/api/auth/listener/logout/"
+        }, status=status.HTTP_200_OK)
+
+    def post(self, request):
+        try:
+            _perform_logout(request, role='LISTENER')
+            return Response({
+                "success": True,
+                "message": "Listener logged out successfully."
+            }, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response({
+                "success": False,
+                "message": f"Listener logout failed: {str(e)}"
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+
 class LogoutView(APIView):
     """
-    User Logout API:
+    Universal User Logout API:
     Supports logging out for both Callers and Listeners.
-    Accepts optional JWT 'refresh' token in the JSON request body.
-    Blacklists the refresh token (if blacklist app is enabled) and resets Listener online availability.
+    Accepts optional JWT 'refresh' token in the JSON request body and/or Bearer token.
+    Blacklists the refresh token and resets Caller/Listener online availability status.
     """
     permission_classes = [permissions.AllowAny]
 
@@ -470,29 +579,7 @@ class LogoutView(APIView):
 
     def post(self, request):
         try:
-            refresh_token = request.data.get('refresh') or request.data.get('refresh_token')
-            if refresh_token:
-                try:
-                    token = RefreshToken(refresh_token)
-                    token.blacklist()
-                except AttributeError:
-                    # Token blacklist app is not enabled in settings/INSTALLED_APPS
-                    pass
-                except TokenError:
-                    # Token is invalid or already expired/blacklisted
-                    pass
-
-            # If user is authenticated and is a listener, set availability to False
-            if request.user and request.user.is_authenticated:
-                if getattr(request.user, 'is_listener', False):
-                    ListenerProfile.objects.filter(user=request.user).update(is_available=False)
-
-            # Terminate Django session if present
-            try:
-                django_logout(request)
-            except Exception:
-                pass
-
+            _perform_logout(request, role=None)
             return Response({
                 "success": True,
                 "message": "Logged out successfully."
@@ -877,6 +964,288 @@ class CategoryDetailView(APIView):
 CategoryListView = CategoryListCreateView
 
 
+# ===================================================
+# 6.2 APP LEGAL & HELPLINE APIS
+# ===================================================
+class TermsAndConditionsView(APIView):
+    """
+    GET /api/terms/ or /api/terms-and-conditions/
+    Returns structured Terms and Conditions for the Buddy platform.
+    Public endpoint.
+    """
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request):
+        return Response({
+            "success": True,
+            "title": "Buddy Terms and Conditions",
+            "app_name": "Buddy App",
+            "version": "1.0.0",
+            "effective_date": "2026-01-01",
+            "last_updated": "2026-09-01",
+            "summary": "Buddy provides peer-to-peer audio and video emotional wellness chat. Listeners are empathetic peers and not licensed medical therapists. By using this service, you agree to treat everyone with dignity, respect confidentiality, and adhere to zero-tolerance harassment rules.",
+            "sections": [
+                {
+                    "id": "acceptance",
+                    "heading": "1. Acceptance of Terms",
+                    "content": "By creating an account, accessing, or using the Buddy application or services, you agree to be bound by these Terms and Conditions. If you do not agree to these terms, do not access or use the platform."
+                },
+                {
+                    "id": "medical_disclaimer",
+                    "heading": "2. Nature of Service & Medical Disclaimer",
+                    "content": "Buddy is a peer-to-peer listening and emotional wellness support network. Listeners are everyday individuals offering empathetic conversation and are NOT licensed psychologists, psychiatrists, therapists, or medical doctors. Buddy DOES NOT provide medical diagnosis, psychotherapy, or psychiatric crisis treatment. If you are experiencing severe distress or a life-threatening crisis, you must contact emergency services or a recognized crisis hotline immediately."
+                },
+                {
+                    "id": "eligibility",
+                    "heading": "3. Eligibility & Age Requirements",
+                    "content": "You must be at least 18 years old, or at least 13 years old with the explicit consent of a parent or legal guardian, to create an account and use the Buddy platform."
+                },
+                {
+                    "id": "phone_and_account",
+                    "heading": "4. Phone Number & Account Security",
+                    "content": "Registration requires a verified phone number via One-Time Password (OTP). You are responsible for maintaining the confidentiality of your session tokens and device access. Any activity conducted under your account is your sole responsibility."
+                },
+                {
+                    "id": "conduct",
+                    "heading": "5. User Code of Conduct & Prohibited Activities",
+                    "content": "Users must maintain respectful, decent conversations. Strictly prohibited behaviors include: harassment, hate speech, explicit nudity or non-consensual sexual content, bullying, recording or streaming call audio/video without explicit two-party consent, financial fraud, impersonation, or solicitation. Violation of these rules will result in an immediate, permanent account ban."
+                },
+                {
+                    "id": "wallet_and_coins",
+                    "heading": "6. Wallet, Virtual Coins & Call Billing",
+                    "content": "Calls between Callers and Listeners may consume in-app virtual coins according to the listener's designated rate per minute. Coin balances are deducted per minute of active call connection. Virtual coins have no monetary cash-out value for callers and completed call coin charges are non-refundable."
+                },
+                {
+                    "id": "confidentiality",
+                    "heading": "7. User Confidentiality & Anonymity",
+                    "content": "To safeguard personal safety, Buddy masks phone numbers and real identities. Users are advised not to disclose real names, residential addresses, financial data, or external contact details. Users agree never to publish or share another user's personal details outside the platform."
+                },
+                {
+                    "id": "termination",
+                    "heading": "8. Account Suspension & Termination",
+                    "content": "Buddy reserves the right to suspend, restrict, or delete any account at our sole discretion, without prior notice, for conduct violating these terms, legal obligations, or safety standards."
+                },
+                {
+                    "id": "limitation_of_liability",
+                    "heading": "9. Limitation of Liability",
+                    "content": "The Buddy service is provided on an 'AS IS' and 'AS AVAILABLE' basis without warranties of any kind. Buddy and its operators shall not be held liable for any direct, indirect, incidental, or consequential damages resulting from user interactions or platform usage."
+                },
+                {
+                    "id": "contact_legal",
+                    "heading": "10. Contact Information",
+                    "content": "If you have questions or legal inquiries regarding these Terms and Conditions, please contact us at legal@buddyapp.com."
+                }
+            ]
+        }, status=status.HTTP_200_OK)
+
+
+class PrivacyPolicyView(APIView):
+    """
+    GET /api/privacy/ or /api/privacy-policy/
+    Returns structured Privacy Policy details for the Buddy platform.
+    Public endpoint.
+    """
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request):
+        return Response({
+            "success": True,
+            "title": "Buddy Privacy Policy",
+            "app_name": "Buddy App",
+            "version": "1.0.0",
+            "effective_date": "2026-01-01",
+            "last_updated": "2026-09-01",
+            "summary": "Your privacy and emotional safety are our highest priorities. Buddy masks your phone number, does not record call audio or video, and allows you to permanently delete your account and personal data at any time.",
+            "sections": [
+                {
+                    "id": "introduction",
+                    "heading": "1. Introduction",
+                    "content": "Buddy ('we', 'our', or 'us') respects your privacy. This Privacy Policy explains what personal data we collect, how we process and protect it, and your rights concerning your personal information."
+                },
+                {
+                    "id": "information_collected",
+                    "heading": "2. Information We Collect",
+                    "content": "We collect only data necessary to deliver our listening services:\n- Account Data: Verified phone number, nickname/first name, age, gender, preferred language(s), and interest tags.\n- Usage & Call Metadata: Call duration, connection timestamps, status (online/busy), and wallet coin ledger.\n- Audio/Video Streams: Media streams are transmitted in real-time. We DO NOT record, transcribe, or store private audio or video conversations on our servers."
+                },
+                {
+                    "id": "masked_identity",
+                    "heading": "3. Identity Shield & Phone Number Masking",
+                    "content": "Your real phone number and identity remain confidential. When connecting to a call, the opposing user only sees your chosen display nickname, interests, and profile language. Your phone number is never disclosed to listeners or callers."
+                },
+                {
+                    "id": "use_of_information",
+                    "heading": "4. How We Use Your Information",
+                    "content": "Your information is used exclusively to: authenticate your login via OTP, match you with relevant peer listeners, calculate call duration and coin deductions, prevent abuse, and provide platform customer support."
+                },
+                {
+                    "id": "third_parties",
+                    "heading": "5. Third-Party Service Providers",
+                    "content": "We engage trusted third-party providers for specific technical functions: SMS OTP delivery gateways and WebRTC media streaming infrastructure (such as Agora). All third-party providers are strictly prohibited from utilizing your information for any unauthorized purpose."
+                },
+                {
+                    "id": "data_security",
+                    "heading": "6. Data Security Practices",
+                    "content": "We implement robust industry-standard safeguards, including HTTPS/TLS encryption in transit, secure database token hashing, and strict database access controls to prevent unauthorized access or disclosure."
+                },
+                {
+                    "id": "user_rights",
+                    "heading": "7. User Rights & Data Deletion",
+                    "content": "You retain full control over your personal data:\n- You can update your profile information at any time via the /api/profile/ endpoint.\n- You can permanently delete your account, caller profile, and data at any time via the /api/delete-account/ endpoint."
+                },
+                {
+                    "id": "children_privacy",
+                    "heading": "8. Children's Privacy",
+                    "content": "Buddy is not directed toward children under 13 years of age. We do not knowingly collect personal information from children under 13."
+                },
+                {
+                    "id": "contact_privacy",
+                    "heading": "9. Contact Us",
+                    "content": "For inquiries regarding this Privacy Policy or data requests, please reach our Data Protection Officer at privacy@buddyapp.com."
+                }
+            ]
+        }, status=status.HTTP_200_OK)
+
+
+class HelplineView(APIView):
+    """
+    GET  /api/helpline/ or /api/support/ : Returns customer support channels and emergency crisis helplines.
+    POST /api/helpline/ or /api/support/ : Submits a customer support ticket or report.
+    Public endpoint.
+    """
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request):
+        return Response({
+            "success": True,
+            "title": "Buddy Support & Crisis Helplines",
+            "app_support": {
+                "email": "support@buddyapp.com",
+                "phone": "+91 8000 123 456",
+                "whatsapp": "+91 8000 123 456",
+                "operating_hours": "24 Hours / 7 Days a Week",
+                "response_time": "Typically within 2 to 4 hours"
+            },
+            "emergency_disclaimer": {
+                "is_crisis_helpline": False,
+                "notice": "IMPORTANT: Buddy is a peer listening app, NOT an emergency medical or suicide crisis service. If you or someone you know is in acute emotional distress, contemplating self-harm, or in immediate danger, please contact a certified emergency crisis line immediately."
+            },
+            "crisis_helplines": [
+                {
+                    "country": "India",
+                    "organization": "Tele-MANAS (Govt of India)",
+                    "toll_free": True,
+                    "phone": "14416 / 1800-891-4416",
+                    "availability": "24/7, Multilingual",
+                    "description": "National Tele Mental Health Programme of India offering free 24/7 psychological support."
+                },
+                {
+                    "country": "India",
+                    "organization": "KIRAN Helpline",
+                    "toll_free": True,
+                    "phone": "1800-599-0019",
+                    "availability": "24/7, 13 Languages",
+                    "description": "Mental health rehabilitation helpline by Ministry of Social Justice & Empowerment."
+                },
+                {
+                    "country": "India",
+                    "organization": "Vandrevala Foundation",
+                    "toll_free": False,
+                    "phone": "+91 9999 666 555",
+                    "availability": "24/7 Free Counseling",
+                    "description": "Trained psychological counselors providing compassionate emotional crisis support."
+                },
+                {
+                    "country": "India",
+                    "organization": "National Emergency Services",
+                    "toll_free": True,
+                    "phone": "112",
+                    "availability": "24/7 Emergency",
+                    "description": "Single emergency response number for Police, Ambulance, and Fire in India."
+                },
+                {
+                    "country": "United States",
+                    "organization": "988 Suicide & Crisis Lifeline",
+                    "toll_free": True,
+                    "phone": "988",
+                    "availability": "24/7 Call & Text",
+                    "description": "Free and confidential support for people in distress and crisis resources."
+                },
+                {
+                    "country": "United States & Canada",
+                    "organization": "Crisis Text Line",
+                    "toll_free": True,
+                    "phone": "Text HOME to 741741",
+                    "availability": "24/7 via SMS",
+                    "description": "Connect with a volunteer crisis counselor via free SMS text."
+                },
+                {
+                    "country": "United Kingdom",
+                    "organization": "Samaritans",
+                    "toll_free": True,
+                    "phone": "116 123",
+                    "availability": "24/7 Free Call",
+                    "description": "Confidential support for anyone needing someone to talk to or in crisis."
+                },
+                {
+                    "country": "International",
+                    "organization": "Befrienders Worldwide",
+                    "toll_free": False,
+                    "phone": "Online Directory",
+                    "website": "https://www.befrienders.org",
+                    "availability": "Worldwide",
+                    "description": "Global network of emotional support helplines in over 30 countries."
+                }
+            ],
+            "support_topics": [
+                {"category": "TECHNICAL", "label": "Call connection, audio/video, or app loading issues"},
+                {"category": "WALLET_AND_COINS", "label": "Coin deductions, balance discrepancies, recharge queries"},
+                {"category": "SAFETY_AND_REPORTING", "label": "Report inappropriate, offensive, or harassing user conduct"},
+                {"category": "ACCOUNT", "label": "Phone number change, profile update, or account deletion assistance"},
+                {"category": "GENERAL", "label": "General questions, feedback, or listener suggestions"}
+            ]
+        }, status=status.HTTP_200_OK)
+
+    def post(self, request):
+        name = (request.data.get('name') or '').strip()
+        email = (request.data.get('email') or '').strip()
+        phone_number = (request.data.get('phone_number') or '').strip()
+        category = (request.data.get('category') or 'GENERAL').strip().upper()
+        subject = (request.data.get('subject') or '').strip()
+        message = (request.data.get('message') or '').strip()
+
+        if not message:
+            return Response({
+                "success": False,
+                "message": "The 'message' field is required to submit a support request."
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        ticket_id = f"BUDDY-{random.randint(100000, 999999)}"
+
+        user_info = None
+        if request.user and request.user.is_authenticated:
+            user_info = {
+                "user_id": request.user.id,
+                "username": request.user.username,
+                "phone_number": request.user.phone_number,
+                "role": request.user.role
+            }
+
+        return Response({
+            "success": True,
+            "message": "Your support request has been received. Our team will get back to you shortly.",
+            "ticket_id": ticket_id,
+            "ticket": {
+                "ticket_id": ticket_id,
+                "name": name or (request.user.first_name if request.user.is_authenticated else "Anonymous"),
+                "email": email,
+                "phone_number": phone_number or (request.user.phone_number if request.user.is_authenticated else ""),
+                "category": category,
+                "subject": subject or f"Support inquiry: {category}",
+                "message": message,
+                "status": "OPEN",
+                "user": user_info
+            }
+        }, status=status.HTTP_201_CREATED)
 
 
 # ===================================================

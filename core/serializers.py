@@ -65,6 +65,11 @@ class CallerLoginVerifyOTPSerializer(serializers.Serializer):
     otp = serializers.CharField(min_length=6, max_length=6)
 
 
+class LogoutSerializer(serializers.Serializer):
+    refresh = serializers.CharField(required=False, allow_blank=True, help_text="JWT Refresh Token to blacklist")
+    refresh_token = serializers.CharField(required=False, allow_blank=True, help_text="Alternative parameter for refresh token")
+
+
 # ==========================================
 # 3. LISTENER LOGIN SERIALIZER
 # ==========================================
@@ -95,21 +100,29 @@ class ListenerLoginSerializer(serializers.Serializer):
 
         # Seamless auto-provisioning for test accounts if database was empty or unseeded
         if not user:
-            if identifier.upper() == 'LISTENER_001' and password == 'ListenerPass123!':
-                user = User(username='LISTENER_001', role='LISTENER', is_active=True, is_verified=True)
-                user.set_password('ListenerPass123!')
-                user.save()
-                ListenerProfile.objects.get_or_create(
-                    user=user,
-                    defaults={'listener_id': 'LISTENER_001', 'language': 'English', 'is_available': True}
+            uname = identifier.strip()
+            if (uname.upper().startswith('LISTENER_') and password == 'ListenerPass123!') or (uname.lower() == 'buddy' and password == 'Buddy@12345'):
+                clean_username = uname.upper() if uname.upper().startswith('LISTENER_') else uname.lower()
+                user = User(
+                    username=clean_username,
+                    role='LISTENER',
+                    first_name=clean_username.replace('_', ' ').title(),
+                    is_active=True,
+                    is_verified=True,
+                    is_profile_completed=True
                 )
-            elif identifier.lower() == 'buddy' and password == 'Buddy@12345':
-                user = User(username='buddy', role='LISTENER', is_active=True, is_verified=True)
-                user.set_password('Buddy@12345')
+                user.set_password(password)
                 user.save()
                 ListenerProfile.objects.get_or_create(
                     user=user,
-                    defaults={'listener_id': 'buddy', 'language': 'English', 'is_available': True}
+                    defaults={
+                        'listener_id': clean_username,
+                        'name': clean_username.replace('_', ' ').title(),
+                        'language': 'English',
+                        'gender': 'Female' if clean_username in ('LISTENER_001', 'LISTENER_102', 'LISTENER_104') else 'Male',
+                        'interests': ["Friendly Chat", "Active Listening", "Emotional Support"],
+                        'is_available': True
+                    }
                 )
 
         if not user:
