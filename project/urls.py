@@ -498,6 +498,8 @@ urlpatterns = [
     path('call-history/<int:call_id>', CallDetailView.as_view()),
 
     # Double-prefix safety for call history
+    path('api/api/calls/history/', CallHistoryView.as_view()),
+    path('api/api/calls/history', CallHistoryView.as_view()),
     path('api/api/callhistory/', CallHistoryView.as_view()),
     path('api/api/callhistory', CallHistoryView.as_view()),
     path('api/api/call-history/', CallHistoryView.as_view()),

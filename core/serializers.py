@@ -344,7 +344,7 @@ class CallHistorySerializer(serializers.ModelSerializer):
     other_user = serializers.SerializerMethodField()
     is_incoming = serializers.SerializerMethodField()
     duration_formatted = serializers.SerializerMethodField()
-    review = CallReviewSerializer(read_only=True)
+    review = serializers.SerializerMethodField()
 
     class Meta:
         model = Call
@@ -384,21 +384,51 @@ class CallHistorySerializer(serializers.ModelSerializer):
         name = user.get_full_name() or user.username
         photo = None
         role = getattr(user, 'role', '')
-        if hasattr(user, 'caller_profile') and getattr(user.caller_profile, 'profile_picture', None):
-            photo = user.caller_profile.profile_picture.url
-            if user.caller_profile.name:
-                name = user.caller_profile.name
-        elif hasattr(user, 'listener_profile') and getattr(user.listener_profile, 'avatar', None):
-            photo = user.listener_profile.avatar.url
-            if user.listener_profile.name:
-                name = user.listener_profile.name
-        elif hasattr(user, 'listener_profile') and getattr(user.listener_profile, 'profile_picture', None):
-            photo = user.listener_profile.profile_picture.url
-            if user.listener_profile.name:
-                name = user.listener_profile.name
+        try:
+            if hasattr(user, 'caller_profile') and user.caller_profile:
+                cp = user.caller_profile
+                if getattr(cp, 'name', None):
+                    name = cp.name
+                if getattr(cp, 'profile_picture', None):
+                    try:
+                        photo = cp.profile_picture.url
+                    except Exception:
+                        photo = None
+        except Exception:
+            pass
+
+        try:
+            if not photo and hasattr(user, 'listener_profile') and user.listener_profile:
+                lp = user.listener_profile
+                if getattr(lp, 'name', None):
+                    name = lp.name
+                if getattr(lp, 'avatar', None):
+                    try:
+                        photo = lp.avatar.url
+                    except Exception:
+                        photo = None
+                if not photo and getattr(lp, 'profile_picture', None):
+                    try:
+                        photo = lp.profile_picture.url
+                    except Exception:
+                        photo = None
+        except Exception:
+            pass
+
+        try:
+            if not photo and getattr(user, 'profile_picture', None):
+                try:
+                    photo = user.profile_picture.url
+                except Exception:
+                    photo = None
+        except Exception:
+            pass
 
         if photo and request and not photo.startswith(('http://', 'https://')):
-            photo = request.build_absolute_uri(photo)
+            try:
+                photo = request.build_absolute_uri(photo)
+            except Exception:
+                pass
 
         return {
             'id': user.id,
@@ -410,60 +440,124 @@ class CallHistorySerializer(serializers.ModelSerializer):
         }
 
     def get_category(self, obj):
-        if getattr(obj, 'category', None):
-            return obj.category.name
+        try:
+            cat = getattr(obj, 'category', None)
+            if cat:
+                return cat.name
+        except Exception:
+            pass
         return "General"
 
+    def get_review(self, obj):
+        try:
+            review_obj = getattr(obj, 'review', None)
+            if review_obj:
+                return CallReviewSerializer(review_obj).data
+        except Exception:
+            pass
+        return None
+
     def get_caller_name(self, obj):
-        if not obj.caller:
+        try:
+            if not obj.caller:
+                return ""
+            if hasattr(obj.caller, 'caller_profile') and getattr(obj.caller.caller_profile, 'name', ''):
+                return obj.caller.caller_profile.name
+            return obj.caller.get_full_name() or obj.caller.username
+        except Exception:
             return ""
-        if hasattr(obj.caller, 'caller_profile') and getattr(obj.caller.caller_profile, 'name', ''):
-            return obj.caller.caller_profile.name
-        return obj.caller.get_full_name() or obj.caller.username
 
     def get_caller_photo(self, obj):
-        request = self.context.get('request')
-        if hasattr(obj.caller, 'caller_profile') and getattr(obj.caller.caller_profile, 'profile_picture', None):
-            url = obj.caller.caller_profile.profile_picture.url
-            return request.build_absolute_uri(url) if request and not url.startswith(('http://', 'https://')) else url
-        return None
+        try:
+            request = self.context.get('request')
+            caller = getattr(obj, 'caller', None)
+            if not caller:
+                return None
+            photo = None
+            if hasattr(caller, 'caller_profile') and getattr(caller.caller_profile, 'profile_picture', None):
+                try:
+                    photo = caller.caller_profile.profile_picture.url
+                except Exception:
+                    photo = None
+            if not photo and getattr(caller, 'profile_picture', None):
+                try:
+                    photo = caller.profile_picture.url
+                except Exception:
+                    photo = None
+            if photo and request and not photo.startswith(('http://', 'https://')):
+                try:
+                    photo = request.build_absolute_uri(photo)
+                except Exception:
+                    pass
+            return photo
+        except Exception:
+            return None
 
     def get_receiver_name(self, obj):
-        if not obj.receiver:
+        try:
+            if not obj.receiver:
+                return ""
+            if hasattr(obj.receiver, 'listener_profile') and getattr(obj.receiver.listener_profile, 'name', ''):
+                return obj.receiver.listener_profile.name
+            return obj.receiver.get_full_name() or obj.receiver.username
+        except Exception:
             return ""
-        if hasattr(obj.receiver, 'listener_profile') and getattr(obj.receiver.listener_profile, 'name', ''):
-            return obj.receiver.listener_profile.name
-        return obj.receiver.get_full_name() or obj.receiver.username
 
     def get_receiver_photo(self, obj):
-        request = self.context.get('request')
-        if hasattr(obj.receiver, 'listener_profile') and getattr(obj.receiver.listener_profile, 'profile_picture', None):
-            url = obj.receiver.listener_profile.profile_picture.url
-            return request.build_absolute_uri(url) if request and not url.startswith(('http://', 'https://')) else url
-        return None
+        try:
+            request = self.context.get('request')
+            receiver = getattr(obj, 'receiver', None)
+            if not receiver:
+                return None
+            photo = None
+            if hasattr(receiver, 'listener_profile'):
+                lp = receiver.listener_profile
+                if getattr(lp, 'profile_picture', None):
+                    try:
+                        photo = lp.profile_picture.url
+                    except Exception:
+                        photo = None
+                if not photo and getattr(lp, 'avatar', None):
+                    try:
+                        photo = lp.avatar.url
+                    except Exception:
+                        photo = None
+            if not photo and getattr(receiver, 'profile_picture', None):
+                try:
+                    photo = receiver.profile_picture.url
+                except Exception:
+                    photo = None
+            if photo and request and not photo.startswith(('http://', 'https://')):
+                try:
+                    photo = request.build_absolute_uri(photo)
+                except Exception:
+                    pass
+            return photo
+        except Exception:
+            return None
 
     def get_caller(self, obj):
         request = self.context.get('request')
-        return self._get_user_info(obj.caller, request)
+        return self._get_user_info(getattr(obj, 'caller', None), request)
 
     def get_agent(self, obj):
         request = self.context.get('request')
-        return self._get_user_info(obj.receiver, request)
+        return self._get_user_info(getattr(obj, 'receiver', None), request)
 
     def get_is_incoming(self, obj):
         current_user = self.context.get('current_user')
-        if current_user and obj.receiver_id == current_user.id:
+        if current_user and getattr(obj, 'receiver_id', None) == current_user.id:
             return True
         return False
 
     def get_other_user(self, obj):
         request = self.context.get('request')
         current_user = self.context.get('current_user')
-        other = obj.receiver if current_user and obj.caller_id == current_user.id else obj.caller
+        other = getattr(obj, 'receiver', None) if current_user and getattr(obj, 'caller_id', None) == current_user.id else getattr(obj, 'caller', None)
         return self._get_user_info(other, request)
 
     def get_duration_formatted(self, obj):
-        total_secs = obj.duration_seconds or 0
+        total_secs = getattr(obj, 'duration_seconds', 0) or 0
         minutes = total_secs // 60
         seconds = total_secs % 60
         return f"{minutes:02d}:{seconds:02d}"
@@ -510,9 +604,12 @@ class IncomingCallSerializer(serializers.ModelSerializer):
         if hasattr(caller, 'caller_profile') and caller.caller_profile.name:
             name = caller.caller_profile.name
         if hasattr(caller, 'caller_profile') and caller.caller_profile.profile_picture:
-            request = self.context.get('request')
-            url = caller.caller_profile.profile_picture.url
-            photo = request.build_absolute_uri(url) if request and not url.startswith(('http://', 'https://')) else url
+            try:
+                request = self.context.get('request')
+                url = caller.caller_profile.profile_picture.url
+                photo = request.build_absolute_uri(url) if request and not url.startswith(('http://', 'https://')) else url
+            except Exception:
+                photo = None
 
         return {
             'id': caller.id,

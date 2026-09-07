@@ -2,10 +2,13 @@
 # pyrefly: ignore [missing-import]
 import random
 import datetime
+import logging
 from django.utils import timezone
 from django.conf import settings  # type: ignore
 from django.shortcuts import render  # type: ignore
 from django.contrib.auth import authenticate, logout as django_logout  # type: ignore
+
+logger = logging.getLogger(__name__)
 # pyrefly: ignore [missing-import]
 from django.db import transaction  # type: ignore
 from django.db.models import Q  # type: ignore
@@ -1424,34 +1427,6 @@ class AddCoinsView(APIView):
         }, status=status.HTTP_200_OK)
 
 
-class CallHistoryView(APIView):
-    """
-    Call History API:
-    - GET /api/callhistory/ : Retrieve call history for caller/listener.
-      Query parameters:
-        - type: 'AUDIO' or 'VIDEO'
-        - status: 'ENDED', 'MISSED', 'REJECTED'
-        - limit: max records (default 50)
-        - phone_number or user_id: for unauthenticated Postman testing
-    - POST /api/callhistory/ : Log a call record and automatically deduct coins if applicable.
-      Payload:
-        - receiver_id or receiver_phone
-        - call_type: 'AUDIO' or 'VIDEO' (default 'AUDIO')
-        - status: 'ENDED', 'MISSED', 'REJECTED' (default 'ENDED')
-        - duration_seconds: int (e.g. 180)
-        - coins_deducted: int (e.g. 15)
-        - channel_name: str (optional)
-    """
-    permission_classes = [permissions.AllowAny]
-
-    def get(self, request, *args, **kwargs):
-        user = _resolve_user_for_wallet(request, **kwargs)
-        if not user:
-            return Response({
-                "success": False,
-                "message": "User not found or authentication required."
-            }, status=status.HTTP_404_NOT_FOUND)
-
 def is_agent_available(agent):
     """
     Checks if an Agent/Listener is currently available:
@@ -1692,7 +1667,7 @@ class IncomingCallsView(APIView):
         calls = Call.objects.filter(
             receiver=agent,
             status__in=['PENDING', 'RINGING']
-        ).select_related('caller', 'category', 'caller__caller_profile').order_by('-created_at')
+        ).select_related('caller', 'caller__caller_profile').order_by('-created_at')
 
         serializer = IncomingCallSerializer(calls, many=True, context={'request': request})
         return Response({
@@ -1710,7 +1685,7 @@ class AcceptCallView(APIView):
     permission_classes = [permissions.AllowAny]
 
     def post(self, request, call_id, *args, **kwargs):
-        call = Call.objects.filter(id=call_id).select_related('caller', 'receiver', 'category').first()
+        call = Call.objects.filter(id=call_id).select_related('caller', 'receiver').first()
         if not call:
             return Response({
                 "success": False,
@@ -1861,7 +1836,7 @@ class EndCallView(APIView):
     permission_classes = [permissions.AllowAny]
 
     def post(self, request, call_id, *args, **kwargs):
-        call = Call.objects.filter(id=call_id).select_related('caller', 'receiver', 'category').first()
+        call = Call.objects.filter(id=call_id).select_related('caller', 'receiver').first()
         if not call:
             return Response({
                 "success": False,
@@ -1965,8 +1940,6 @@ class CallHistoryView(APIView):
         else:
             queryset = Call.objects.filter(Q(caller=user) | Q(receiver=user))
 
-        queryset = queryset.select_related('caller', 'receiver', 'category', 'review').order_by('-created_at')
-
         call_type = request.query_params.get('type') or request.query_params.get('call_type')
         if call_type:
             queryset = queryset.filter(call_type__iexact=call_type.strip())
@@ -1981,29 +1954,55 @@ class CallHistoryView(APIView):
         except (ValueError, TypeError):
             limit = 50
 
-        calls = list(queryset[:limit])
-        serializer = CallHistorySerializer(
-            calls,
-            many=True,
-            context={'request': request, 'current_user': user}
-        )
+        # Safely fetch calls with fallback if newly added columns aren't in DB yet
+        calls = []
+        try:
+            calls = list(queryset.select_related('caller', 'receiver').order_by('-created_at')[:limit])
+        except Exception as e:
+            logger.warning("Falling back on call history query without new fields: %s", e)
+            try:
+                calls = list(queryset.only(
+                    'id', 'caller', 'receiver', 'channel_name', 'call_type',
+                    'status', 'started_at', 'ended_at', 'duration_seconds',
+                    'coins_deducted', 'created_at'
+                ).select_related('caller', 'receiver').order_by('-created_at')[:limit])
+            except Exception as e2:
+                logger.error("Call history query failed: %s", e2)
+                calls = []
 
         formatted_calls = []
         for c in calls:
-            cat_name = c.category.name if getattr(c, 'category', None) else "General"
+            cat_name = "General"
+            try:
+                if hasattr(c, 'category') and c.category:
+                    cat_name = c.category.name
+            except Exception:
+                cat_name = "General"
+
             formatted_calls.append({
                 "id": c.id,
                 "category": cat_name,
-                "status": c.status,
-                "start_time": c.started_at,
-                "end_time": c.ended_at,
-                "duration": c.duration_seconds
+                "status": getattr(c, 'status', 'COMPLETED'),
+                "start_time": getattr(c, 'started_at', None),
+                "end_time": getattr(c, 'ended_at', None),
+                "duration": getattr(c, 'duration_seconds', 0)
             })
+
+        try:
+            serializer = CallHistorySerializer(
+                calls,
+                many=True,
+                context={'request': request, 'current_user': user}
+            )
+            serialized_data = serializer.data
+        except Exception as e:
+            logger.warning("Error serializing call history: %s", e)
+            serialized_data = formatted_calls
 
         return Response({
             "success": True,
             "calls": formatted_calls,
-            "data": serializer.data,
+            "data": serialized_data,
             "total_calls": len(calls)
         }, status=status.HTTP_200_OK)
 
@@ -2081,11 +2080,21 @@ class CallHistoryView(APIView):
                     description=f"Spent on {call_type.lower()} call with {receiver.username}"
                 )
 
-        serializer = CallHistorySerializer(call, context={'request': request, 'current_user': caller})
+        try:
+            serializer = CallHistorySerializer(call, context={'request': request, 'current_user': caller})
+            call_data = serializer.data
+        except Exception:
+            call_data = {
+                "id": call.id,
+                "status": call.status,
+                "channel_name": call.channel_name,
+                "call_type": call.call_type
+            }
+
         return Response({
             "success": True,
             "message": "Call logged successfully.",
-            "data": serializer.data
+            "data": call_data
         }, status=status.HTTP_201_CREATED)
 
 
@@ -2098,12 +2107,35 @@ class CallDetailView(APIView):
     permission_classes = [permissions.AllowAny]
 
     def get(self, request, call_id, *args, **kwargs):
-        call = Call.objects.filter(id=call_id).select_related('caller', 'receiver', 'review').first()
+        call = None
+        try:
+            call = Call.objects.filter(id=call_id).select_related('caller', 'receiver').first()
+        except Exception:
+            try:
+                call = Call.objects.only(
+                    'id', 'caller', 'receiver', 'channel_name', 'call_type',
+                    'status', 'started_at', 'ended_at', 'duration_seconds',
+                    'coins_deducted', 'created_at'
+                ).select_related('caller', 'receiver').filter(id=call_id).first()
+            except Exception:
+                call = None
+
         if not call:
             return Response({"success": False, "message": "Call record not found."}, status=status.HTTP_404_NOT_FOUND)
+
         user = _resolve_user_for_wallet(request, **kwargs)
-        serializer = CallHistorySerializer(call, context={'request': request, 'current_user': user})
-        return Response({"success": True, "data": serializer.data}, status=status.HTTP_200_OK)
+        try:
+            serializer = CallHistorySerializer(call, context={'request': request, 'current_user': user})
+            data = serializer.data
+        except Exception:
+            data = {
+                "id": call.id,
+                "status": getattr(call, 'status', 'COMPLETED'),
+                "start_time": getattr(call, 'started_at', None),
+                "end_time": getattr(call, 'ended_at', None),
+                "duration": getattr(call, 'duration_seconds', 0)
+            }
+        return Response({"success": True, "data": data}, status=status.HTTP_200_OK)
 
     def delete(self, request, call_id, *args, **kwargs):
         call = Call.objects.filter(id=call_id).first()

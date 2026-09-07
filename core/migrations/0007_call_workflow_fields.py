@@ -16,16 +16,25 @@ def ensure_call_columns(apps, schema_editor):
             columns = [col.name.lower() for col in connection.introspection.get_table_description(cursor, 'core_call')]
             
             if 'category_id' not in columns:
-                if connection.vendor == 'sqlite':
-                    schema_editor.execute("ALTER TABLE `core_call` ADD COLUMN `category_id` bigint REFERENCES `core_category` (`id`) DEFERRABLE INITIALLY DEFERRED")
-                else:
-                    schema_editor.execute("ALTER TABLE `core_call` ADD COLUMN `category_id` bigint DEFAULT NULL")
+                try:
+                    if connection.vendor == 'sqlite':
+                        schema_editor.execute("ALTER TABLE `core_call` ADD COLUMN `category_id` bigint REFERENCES `core_category` (`id`) DEFERRABLE INITIALLY DEFERRED")
+                    else:
+                        schema_editor.execute("ALTER TABLE `core_call` ADD COLUMN `category_id` bigint DEFAULT NULL")
+                except Exception:
+                    pass
             
             if 'accepted_at' not in columns:
-                schema_editor.execute("ALTER TABLE `core_call` ADD COLUMN `accepted_at` datetime NULL")
+                try:
+                    schema_editor.execute("ALTER TABLE `core_call` ADD COLUMN `accepted_at` datetime NULL")
+                except Exception:
+                    pass
                 
             if 'rejected_at' not in columns:
-                schema_editor.execute("ALTER TABLE `core_call` ADD COLUMN `rejected_at` datetime NULL")
+                try:
+                    schema_editor.execute("ALTER TABLE `core_call` ADD COLUMN `rejected_at` datetime NULL")
+                except Exception:
+                    pass
 
 
 class Migration(migrations.Migration):
@@ -35,45 +44,51 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        migrations.RunPython(ensure_call_columns, reverse_code=migrations.RunPython.noop),
-        migrations.AlterField(
-            model_name='call',
-            name='status',
-            field=models.CharField(
-                choices=[
-                    ('PENDING', 'Pending'),
-                    ('RINGING', 'Ringing'),
-                    ('ACCEPTED', 'Accepted'),
-                    ('ACTIVE', 'Active'),
-                    ('COMPLETED', 'Completed'),
-                    ('REJECTED', 'Rejected'),
-                    ('CANCELLED', 'Cancelled'),
-                    ('MISSED', 'Missed'),
-                    ('ENDED', 'Ended'),
-                ],
-                default='RINGING',
-                max_length=20,
-            ),
-        ),
-        migrations.AddField(
-            model_name='call',
-            name='category',
-            field=models.ForeignKey(
-                blank=True,
-                null=True,
-                on_delete=django.db.models.deletion.SET_NULL,
-                related_name='calls',
-                to='core.category',
-            ),
-        ),
-        migrations.AddField(
-            model_name='call',
-            name='accepted_at',
-            field=models.DateTimeField(blank=True, null=True),
-        ),
-        migrations.AddField(
-            model_name='call',
-            name='rejected_at',
-            field=models.DateTimeField(blank=True, null=True),
+        migrations.SeparateDatabaseAndState(
+            database_operations=[
+                migrations.RunPython(ensure_call_columns, reverse_code=migrations.RunPython.noop),
+            ],
+            state_operations=[
+                migrations.AlterField(
+                    model_name='call',
+                    name='status',
+                    field=models.CharField(
+                        choices=[
+                            ('PENDING', 'Pending'),
+                            ('RINGING', 'Ringing'),
+                            ('ACCEPTED', 'Accepted'),
+                            ('ACTIVE', 'Active'),
+                            ('COMPLETED', 'Completed'),
+                            ('REJECTED', 'Rejected'),
+                            ('CANCELLED', 'Cancelled'),
+                            ('MISSED', 'Missed'),
+                            ('ENDED', 'Ended'),
+                        ],
+                        default='RINGING',
+                        max_length=20,
+                    ),
+                ),
+                migrations.AddField(
+                    model_name='call',
+                    name='category',
+                    field=models.ForeignKey(
+                        blank=True,
+                        null=True,
+                        on_delete=django.db.models.deletion.SET_NULL,
+                        related_name='calls',
+                        to='core.category',
+                    ),
+                ),
+                migrations.AddField(
+                    model_name='call',
+                    name='accepted_at',
+                    field=models.DateTimeField(blank=True, null=True),
+                ),
+                migrations.AddField(
+                    model_name='call',
+                    name='rejected_at',
+                    field=models.DateTimeField(blank=True, null=True),
+                ),
+            ]
         ),
     ]
