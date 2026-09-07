@@ -24,6 +24,7 @@ from .views import (  # type: ignore
     DeleteAccountView,
     # Caller Profile
     ProfileView,
+    CallerProfileView,
     # Metadata Dropdowns
     LanguageListView,
     InterestListView,
@@ -126,14 +127,45 @@ urlpatterns = [
     path('token/refresh', TokenRefreshView.as_view(), name='token-refresh-short-noslash'),
 
     # ==========================================
-    # 5. CALLER PROFILE
+    # 5. CALLER PROFILE (ALL VARIANTS & ALIASES)
     # ==========================================
     path('profile/', ProfileView.as_view(), name='profile-detail'),
-    path('caller/profile/', ProfileView.as_view(), name='caller-profile'),
+    path('profile', ProfileView.as_view()),
+    path('profile/<str:identifier>/', ProfileView.as_view()),
+    path('profile/<str:identifier>', ProfileView.as_view()),
+
+    path('caller/profile/', CallerProfileView.as_view(), name='caller-profile'),
+    path('caller/profile', CallerProfileView.as_view()),
+    path('caller/profile/<str:identifier>/', CallerProfileView.as_view()),
+    path('caller/profile/<str:identifier>', CallerProfileView.as_view()),
+
+    path('caller-profile/', CallerProfileView.as_view(), name='caller-profile-dash'),
+    path('caller-profile', CallerProfileView.as_view()),
+    path('caller-profile/<str:identifier>/', CallerProfileView.as_view()),
+    path('caller-profile/<str:identifier>', CallerProfileView.as_view()),
+
+    path('callerprofile/', CallerProfileView.as_view(), name='caller-profile-joined'),
+    path('callerprofile', CallerProfileView.as_view()),
+    path('callerprofile/<str:identifier>/', CallerProfileView.as_view()),
+    path('callerprofile/<str:identifier>', CallerProfileView.as_view()),
+
+    # Exact name matches requested by user
+    path('callerprofileview/', CallerProfileView.as_view(), name='caller-profile-view'),
+    path('callerprofileview', CallerProfileView.as_view()),
+    path('callerprofileview/<str:identifier>/', CallerProfileView.as_view()),
+    path('callerprofileview/<str:identifier>', CallerProfileView.as_view()),
+
+    path('caller-profile-view/', CallerProfileView.as_view(), name='caller-profile-view-dash'),
+    path('caller-profile-view', CallerProfileView.as_view()),
+    path('caller-profile-view/<str:identifier>/', CallerProfileView.as_view()),
+    path('caller-profile-view/<str:identifier>', CallerProfileView.as_view()),
+
     path('profile/delete/', DeleteAccountView.as_view(), name='profile-delete'),
     path('profile/delete', DeleteAccountView.as_view()),
     path('caller/profile/delete/', DeleteAccountView.as_view()),
     path('caller/profile/delete', DeleteAccountView.as_view()),
+    path('caller-profile/delete/', DeleteAccountView.as_view()),
+    path('caller-profile/delete', DeleteAccountView.as_view()),
 
     # ==========================================
     # 6. METADATA DROPDOWNS (LANGUAGES, INTERESTS & CATEGORIES)

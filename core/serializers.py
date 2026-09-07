@@ -51,18 +51,36 @@ class CallerSignupCompleteProfileSerializer(serializers.Serializer):
 # 2. CALLER LOGIN SERIALIZERS
 # ==========================================
 class CallerLoginSendOTPSerializer(serializers.Serializer):
-    phone_number = serializers.CharField(max_length=17)
+    phone_number = serializers.CharField(max_length=25, required=False)
+    phone = serializers.CharField(max_length=25, required=False)
+    phoneNumber = serializers.CharField(max_length=25, required=False)
+    username = serializers.CharField(max_length=25, required=False)
 
-    def validate_phone_number(self, value):
-        phone = value.strip()
+    def validate(self, attrs):
+        phone = (attrs.get('phone_number') or attrs.get('phone') or attrs.get('phoneNumber') or attrs.get('username') or '').strip()
         if not phone:
-            raise serializers.ValidationError("Phone number is required.")
-        return phone
+            raise serializers.ValidationError({"phone_number": "Phone number is required."})
+        attrs['phone_number'] = phone
+        return attrs
 
 
 class CallerLoginVerifyOTPSerializer(serializers.Serializer):
-    phone_number = serializers.CharField(max_length=17)
-    otp = serializers.CharField(min_length=6, max_length=6)
+    phone_number = serializers.CharField(max_length=25, required=False)
+    phone = serializers.CharField(max_length=25, required=False)
+    phoneNumber = serializers.CharField(max_length=25, required=False)
+    username = serializers.CharField(max_length=25, required=False)
+    otp = serializers.CharField(required=True)
+
+    def validate(self, attrs):
+        phone = (attrs.get('phone_number') or attrs.get('phone') or attrs.get('phoneNumber') or attrs.get('username') or '').strip()
+        if not phone:
+            raise serializers.ValidationError({"phone_number": "Phone number is required."})
+        attrs['phone_number'] = phone
+        attrs['otp'] = str(attrs.get('otp', '')).strip()
+        if not attrs['otp']:
+            raise serializers.ValidationError({"otp": "OTP code is required."})
+        return attrs
+
 
 
 class LogoutSerializer(serializers.Serializer):

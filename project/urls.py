@@ -45,6 +45,8 @@ from core.views import (
     TermsAndConditionsView,
     PrivacyPolicyView,
     HelplineView,
+    ProfileView,
+    CallerProfileView,
 )
 from core.caller_views import app_home_view, admin_panel_view
 
@@ -245,6 +247,58 @@ urlpatterns = [
     path('api/privacy', PrivacyPolicyView.as_view()),
     path('privacy/', PrivacyPolicyView.as_view()),
     path('privacy', PrivacyPolicyView.as_view()),
+
+    # ==========================================
+    # CALLER PROFILE ROUTES (ALL VARIATIONS)
+    # ==========================================
+    path('api/profile/', ProfileView.as_view(), name='api-profile'),
+    path('api/profile', ProfileView.as_view()),
+    path('api/profile/<str:identifier>/', ProfileView.as_view()),
+    path('api/profile/<str:identifier>', ProfileView.as_view()),
+    path('profile/', ProfileView.as_view()),
+    path('profile', ProfileView.as_view()),
+    path('profile/<str:identifier>/', ProfileView.as_view()),
+    path('profile/<str:identifier>', ProfileView.as_view()),
+
+    path('api/caller/profile/', CallerProfileView.as_view(), name='api-caller-profile'),
+    path('api/caller/profile', CallerProfileView.as_view()),
+    path('api/caller/profile/<str:identifier>/', CallerProfileView.as_view()),
+    path('api/caller/profile/<str:identifier>', CallerProfileView.as_view()),
+    path('caller/profile/', CallerProfileView.as_view()),
+    path('caller/profile', CallerProfileView.as_view()),
+    path('caller/profile/<str:identifier>/', CallerProfileView.as_view()),
+    path('caller/profile/<str:identifier>', CallerProfileView.as_view()),
+
+    path('api/callerprofileview/', CallerProfileView.as_view(), name='api-callerprofileview'),
+    path('api/callerprofileview', CallerProfileView.as_view()),
+    path('api/callerprofileview/<str:identifier>/', CallerProfileView.as_view()),
+    path('api/callerprofileview/<str:identifier>', CallerProfileView.as_view()),
+    path('callerprofileview/', CallerProfileView.as_view()),
+    path('callerprofileview', CallerProfileView.as_view()),
+    path('callerprofileview/<str:identifier>/', CallerProfileView.as_view()),
+    path('callerprofileview/<str:identifier>', CallerProfileView.as_view()),
+
+    path('api/callerprofile/', CallerProfileView.as_view(), name='api-callerprofile'),
+    path('api/callerprofile', CallerProfileView.as_view()),
+    path('api/callerprofile/<str:identifier>/', CallerProfileView.as_view()),
+    path('api/callerprofile/<str:identifier>', CallerProfileView.as_view()),
+    path('callerprofile/', CallerProfileView.as_view()),
+    path('callerprofile', CallerProfileView.as_view()),
+    path('callerprofile/<str:identifier>/', CallerProfileView.as_view()),
+    path('callerprofile/<str:identifier>', CallerProfileView.as_view()),
+
+    path('api/caller-profile/', CallerProfileView.as_view()),
+    path('api/caller-profile', CallerProfileView.as_view()),
+    path('caller-profile/', CallerProfileView.as_view()),
+    path('caller-profile', CallerProfileView.as_view()),
+
+    # Double-prefix safety (for Postman environment baseUrl with /api)
+    path('api/api/profile/', ProfileView.as_view()),
+    path('api/api/profile', ProfileView.as_view()),
+    path('api/api/caller/profile/', CallerProfileView.as_view()),
+    path('api/api/caller/profile', CallerProfileView.as_view()),
+    path('api/api/callerprofileview/', CallerProfileView.as_view()),
+    path('api/api/callerprofileview', CallerProfileView.as_view()),
 
     # Standard App routing
     path('api/', include('core.urls')),
