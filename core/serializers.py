@@ -202,9 +202,21 @@ class CallerProfileSerializer(serializers.ModelSerializer):
             'gender',
             'language',
             'is_online',
+            'profile_visible_in_feed',
+            'ghost_calling_mode',
             'created_at',
             'updated_at',
         )
+
+
+class CallerPrivacySettingsSerializer(serializers.Serializer):
+    """
+    Serializer for Caller Privacy & Security Settings:
+    - profile_visible_in_feed: bool (default True)
+    - ghost_calling_mode: bool (default False)
+    """
+    profile_visible_in_feed = serializers.BooleanField(required=False)
+    ghost_calling_mode = serializers.BooleanField(required=False)
 
     def get_profession(self, obj):
         # Note: Profession is defined on BuddyProfile, not in CallerProfile model

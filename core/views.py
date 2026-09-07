@@ -34,7 +34,7 @@ from .models import (  # type: ignore
     Call,
     CallReview,
 )
-from .permissions import IsAdminUser  # type: ignore
+from .permissions import IsAdminUser, IsCallerUser  # type: ignore
 # pyrefly: ignore [missing-import]
 from .otp_service import (  # type: ignore
     create_and_send_otp,
@@ -52,6 +52,7 @@ from .serializers import (  # type: ignore
     ListenerLoginSerializer,
     LogoutSerializer,
     CallerProfileSerializer,
+    CallerPrivacySettingsSerializer,
     ListenerProfileSerializer,
     UserDetailSerializer,
     CategorySerializer,
@@ -2507,71 +2508,123 @@ class TermsAndConditionsView(APIView):
         }, status=status.HTTP_200_OK)
 
 
-class PrivacyPolicyView(APIView):
+class CallerPrivacySettingsView(APIView):
     """
-    GET /api/privacy/ or /api/privacy-policy/
-    Returns structured Privacy Policy details for the Buddy platform.
-    Public endpoint.
-    """
-    permission_classes = [permissions.AllowAny]
+    Caller Privacy & Security Settings API:
+    - GET   /api/privacy/ : Retrieve authenticated caller's privacy settings.
+    - PATCH /api/privacy/ : Update authenticated caller's privacy settings.
 
-    def get(self, request):
+    Settings:
+      - profile_visible_in_feed (bool, default True): Whether caller appears in matching/feed.
+      - ghost_calling_mode (bool, default False): Whether caller online/phone status is masked.
+
+    Permissions:
+      - JWT Authentication required (401 if unauthenticated).
+      - Caller role only (403 if listener/agent or non-caller).
+    """
+    permission_classes = [permissions.IsAuthenticated, IsCallerUser]
+
+    def get(self, request, *args, **kwargs):
+        user = request.user
+        if not getattr(user, 'is_caller', False):
+            return Response({
+                "detail": "Access restricted to Caller accounts only."
+            }, status=status.HTTP_403_FORBIDDEN)
+
+        try:
+            profile, _ = CallerProfile.objects.get_or_create(user=user)
+        except Exception:
+            profile = getattr(user, 'caller_profile', None)
+
+        profile_visible = getattr(profile, 'profile_visible_in_feed', True) if profile else True
+        if profile_visible is None:
+            profile_visible = True
+
+        ghost_mode = getattr(profile, 'ghost_calling_mode', False) if profile else False
+        if ghost_mode is None:
+            ghost_mode = False
+
         return Response({
             "success": True,
-            "title": "Buddy Privacy Policy",
-            "app_name": "Buddy App",
-            "version": "1.0.0",
-            "effective_date": "2026-01-01",
-            "last_updated": "2026-09-01",
-            "summary": "Your privacy and emotional safety are our highest priorities. Buddy masks your phone number, does not record call audio or video, and allows you to permanently delete your account and personal data at any time.",
-            "sections": [
-                {
-                    "id": "introduction",
-                    "heading": "1. Introduction",
-                    "content": "Buddy ('we', 'our', or 'us') respects your privacy. This Privacy Policy explains what personal data we collect, how we process and protect it, and your rights concerning your personal information."
-                },
-                {
-                    "id": "information_collected",
-                    "heading": "2. Information We Collect",
-                    "content": "We collect only data necessary to deliver our listening services:\n- Account Data: Verified phone number, nickname/first name, age, gender, preferred language(s), and interest tags.\n- Usage & Call Metadata: Call duration, connection timestamps, status (online/busy), and wallet coin ledger.\n- Audio/Video Streams: Media streams are transmitted in real-time. We DO NOT record, transcribe, or store private audio or video conversations on our servers."
-                },
-                {
-                    "id": "masked_identity",
-                    "heading": "3. Identity Shield & Phone Number Masking",
-                    "content": "Your real phone number and identity remain confidential. When connecting to a call, the opposing user only sees your chosen display nickname, interests, and profile language. Your phone number is never disclosed to listeners or callers."
-                },
-                {
-                    "id": "use_of_information",
-                    "heading": "4. How We Use Your Information",
-                    "content": "Your information is used exclusively to: authenticate your login via OTP, match you with relevant peer listeners, calculate call duration and coin deductions, prevent abuse, and provide platform customer support."
-                },
-                {
-                    "id": "third_parties",
-                    "heading": "5. Third-Party Service Providers",
-                    "content": "We engage trusted third-party providers for specific technical functions: SMS OTP delivery gateways and WebRTC media streaming infrastructure (such as Agora). All third-party providers are strictly prohibited from utilizing your information for any unauthorized purpose."
-                },
-                {
-                    "id": "data_security",
-                    "heading": "6. Data Security Practices",
-                    "content": "We implement robust industry-standard safeguards, including HTTPS/TLS encryption in transit, secure database token hashing, and strict database access controls to prevent unauthorized access or disclosure."
-                },
-                {
-                    "id": "user_rights",
-                    "heading": "7. User Rights & Data Deletion",
-                    "content": "You retain full control over your personal data:\n- You can update your profile information at any time via the /api/profile/ endpoint.\n- You can permanently delete your account, caller profile, and data at any time via the /api/delete-account/ endpoint."
-                },
-                {
-                    "id": "children_privacy",
-                    "heading": "8. Children's Privacy",
-                    "content": "Buddy is not directed toward children under 13 years of age. We do not knowingly collect personal information from children under 13."
-                },
-                {
-                    "id": "contact_privacy",
-                    "heading": "9. Contact Us",
-                    "content": "For inquiries regarding this Privacy Policy or data requests, please reach our Data Protection Officer at privacy@buddyapp.com."
-                }
-            ]
+            "profile_visible_in_feed": bool(profile_visible),
+            "ghost_calling_mode": bool(ghost_mode)
         }, status=status.HTTP_200_OK)
+
+    def patch(self, request, *args, **kwargs):
+        user = request.user
+        if not getattr(user, 'is_caller', False):
+            return Response({
+                "detail": "Access restricted to Caller accounts only."
+            }, status=status.HTTP_403_FORBIDDEN)
+
+        data = request.data
+        if not isinstance(data, dict):
+            return Response({
+                "success": False,
+                "message": "Invalid payload format. JSON object required."
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        has_profile_visible = 'profile_visible_in_feed' in data
+        has_ghost_mode = 'ghost_calling_mode' in data
+
+        if not has_profile_visible and not has_ghost_mode:
+            return Response({
+                "success": False,
+                "message": "At least one setting ('profile_visible_in_feed' or 'ghost_calling_mode') must be provided."
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        if has_profile_visible:
+            val = data['profile_visible_in_feed']
+            if type(val) is not bool:
+                return Response({
+                    "success": False,
+                    "message": "profile_visible_in_feed must be a boolean (true or false)."
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+        if has_ghost_mode:
+            val = data['ghost_calling_mode']
+            if type(val) is not bool:
+                return Response({
+                    "success": False,
+                    "message": "ghost_calling_mode must be a boolean (true or false)."
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            profile, _ = CallerProfile.objects.get_or_create(user=user)
+        except Exception:
+            profile = getattr(user, 'caller_profile', None)
+
+        update_fields = []
+        if profile:
+            if has_profile_visible:
+                profile.profile_visible_in_feed = data['profile_visible_in_feed']
+                update_fields.append('profile_visible_in_feed')
+
+            if has_ghost_mode:
+                profile.ghost_calling_mode = data['ghost_calling_mode']
+                update_fields.append('ghost_calling_mode')
+
+            try:
+                profile.save(update_fields=update_fields)
+            except Exception:
+                try:
+                    profile.save()
+                except Exception as e:
+                    logger.warning("Could not persist privacy settings to DB: %s", e)
+
+        current_profile_visible = getattr(profile, 'profile_visible_in_feed', True) if profile else data.get('profile_visible_in_feed', True)
+        current_ghost_mode = getattr(profile, 'ghost_calling_mode', False) if profile else data.get('ghost_calling_mode', False)
+
+        return Response({
+            "success": True,
+            "message": "Privacy settings updated successfully.",
+            "profile_visible_in_feed": bool(current_profile_visible),
+            "ghost_calling_mode": bool(current_ghost_mode)
+        }, status=status.HTTP_200_OK)
+
+
+# Backward-compatibility alias
+PrivacyPolicyView = CallerPrivacySettingsView
 
 
 class HelplineView(APIView):

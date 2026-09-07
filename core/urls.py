@@ -45,6 +45,7 @@ from .views import (  # type: ignore
     CategoryDetailView,
     # Legal & Helpline
     TermsAndConditionsView,
+    CallerPrivacySettingsView,
     PrivacyPolicyView,
     HelplineView,
     # Web Simulator & Web Auth Compatibility Views
@@ -279,10 +280,10 @@ urlpatterns = [
     path('terms-and-conditions/', TermsAndConditionsView.as_view()),
     path('terms-and-conditions', TermsAndConditionsView.as_view()),
 
-    path('privacy/', PrivacyPolicyView.as_view(), name='privacy-policy'),
-    path('privacy', PrivacyPolicyView.as_view()),
-    path('privacy-policy/', PrivacyPolicyView.as_view()),
-    path('privacy-policy', PrivacyPolicyView.as_view()),
+    path('privacy/', CallerPrivacySettingsView.as_view(), name='privacy-settings'),
+    path('privacy', CallerPrivacySettingsView.as_view()),
+    path('privacy-policy/', CallerPrivacySettingsView.as_view()),
+    path('privacy-policy', CallerPrivacySettingsView.as_view()),
 
     path('helpline/', HelplineView.as_view(), name='helpline'),
     path('helpline', HelplineView.as_view()),

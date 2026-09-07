@@ -130,6 +130,8 @@ class CallerProfile(models.Model):
     interests = models.JSONField(default=list, blank=True)
     profile_picture = models.ImageField(upload_to='callers/', null=True, blank=True)
     is_online = models.BooleanField(default=False)
+    profile_visible_in_feed = models.BooleanField(default=True)
+    ghost_calling_mode = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
