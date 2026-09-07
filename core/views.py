@@ -743,11 +743,7 @@ class ProfileView(APIView):
     permission_classes = [permissions.AllowAny]
 
     def _resolve_user(self, request, *args, **kwargs):
-        # 1. Authenticated user via JWT token
-        if getattr(request, 'user', None) and request.user.is_authenticated:
-            return request.user
-
-        # 2. Identifier passed in URL kwargs (e.g. /profile/<identifier>/)
+        # 1. First priority: Check if an explicit identifier or phone number is passed in URL path
         ident = (
             kwargs.get('identifier') or 
             kwargs.get('user_id') or 
@@ -756,25 +752,29 @@ class ProfileView(APIView):
             kwargs.get('username')
         )
 
-        # 3. Identifier passed in query params (?phone_number=... or ?id=...)
+        # 2. Check query params (?phone_number=... or ?phone=... or ?mobile=...)
         if not ident:
             ident = (
                 request.query_params.get('phone_number') or 
                 request.query_params.get('phone') or 
                 request.query_params.get('phoneNumber') or 
+                request.query_params.get('mobile') or 
+                request.query_params.get('number') or 
                 request.query_params.get('username') or 
                 request.query_params.get('user_id') or 
                 request.query_params.get('id')
             )
 
-        # 4. Identifier passed in body (ONLY on write methods: POST, PUT, PATCH)
-        if not ident and request.method in ('POST', 'PUT', 'PATCH'):
+        # 3. Check request body data (JSON or form data, even on GET if provided by Postman)
+        if not ident:
             try:
-                if isinstance(request.data, dict):
+                if hasattr(request, 'data') and isinstance(request.data, dict):
                     ident = (
                         request.data.get('phone_number') or 
                         request.data.get('phone') or 
                         request.data.get('phoneNumber') or 
+                        request.data.get('mobile') or 
+                        request.data.get('number') or 
                         request.data.get('user_id') or 
                         request.data.get('id') or 
                         request.data.get('username')
@@ -782,27 +782,51 @@ class ProfileView(APIView):
             except Exception:
                 pass
 
+        # If an explicit identifier was given by the user in Postman/client:
         if ident:
             ident_str = str(ident).strip()
-            # Try by numeric ID
-            if ident_str.isdigit():
+
+            # A. Try by numeric ID (e.g. user_id = 5)
+            if ident_str.isdigit() and len(ident_str) < 7:
                 user = User.objects.filter(id=int(ident_str)).first()
                 if user:
                     return user
-            # Try by exact phone number
-            user = User.objects.filter(phone_number=ident_str).first()
+
+            # B. Try phone number lookup (exact or suffix match)
+            clean_digits = ''.join(ch for ch in ident_str if ch.isdigit())
+            user = (
+                User.objects.filter(phone_number=ident_str).first() or
+                User.objects.filter(phone_number__iexact=ident_str).first()
+            )
+            if not user and len(clean_digits) >= 10:
+                user = User.objects.filter(phone_number__endswith=clean_digits[-10:]).first()
+
             if user:
                 return user
-            # Try phone suffix match
-            clean_phone = ident_str.replace(' ', '').replace('-', '').replace('+', '')
-            if len(clean_phone) >= 10:
-                user = User.objects.filter(phone_number__endswith=clean_phone[-10:]).first()
-                if user:
-                    return user
-            # Try by username
+
+            # C. Try username lookup
             user = User.objects.filter(username__iexact=ident_str).first()
             if user:
                 return user
+
+            # D. If phone number doesn't exist yet, AUTO-CREATE caller for THIS number
+            # (Ensures changing the number in Postman instantly returns this new caller's profile!)
+            if clean_digits:
+                phone_formatted = f"+91{clean_digits[-10:]}" if len(clean_digits) >= 10 else f"+{clean_digits}"
+                user, _ = User.objects.get_or_create(
+                    phone_number=phone_formatted,
+                    defaults={
+                        'username': f"caller_{clean_digits[-10:]}",
+                        'role': 'CALLER',
+                        'is_verified': True,
+                        'first_name': f"Caller {clean_digits[-4:]}"
+                    }
+                )
+                return user
+
+        # 4. If no explicit identifier was given, use authenticated token user
+        if getattr(request, 'user', None) and request.user.is_authenticated:
+            return request.user
 
         # 5. Fallback convenience: return first available caller
         first_caller = User.objects.filter(role__in=['CALLER', 'USER']).first()
@@ -928,6 +952,15 @@ class ProfileView(APIView):
                     "errors": serializer.errors
                 }, status=status.HTTP_400_BAD_REQUEST)
             serializer.save()
+            # If phone_number was explicitly supplied in update payload, update user model as well
+            new_phone = request.data.get('phone_number') or request.data.get('phone') or request.data.get('phoneNumber')
+            if new_phone:
+                new_phone_str = str(new_phone).strip()
+                if new_phone_str and new_phone_str != user.phone_number:
+                    user.phone_number = new_phone_str
+                    user.save(update_fields=['phone_number'])
+                    profile.refresh_from_db()
+
             return Response({
                 "success": True,
                 "message": "Caller profile updated successfully.",
