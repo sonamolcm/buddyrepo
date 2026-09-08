@@ -7,6 +7,7 @@ from django.utils import timezone
 from django.conf import settings  # type: ignore
 from django.shortcuts import render  # type: ignore
 from django.contrib.auth import authenticate, logout as django_logout  # type: ignore
+from django.contrib.auth.tokens import default_token_generator  # type: ignore
 
 logger = logging.getLogger(__name__)
 # pyrefly: ignore [missing-import]
@@ -35,8 +36,12 @@ from .models import (  # type: ignore
     CallReview,
     CallerFavorite,
     BuddyProfile,
+    AgentDutySession,
+    AgentWallet,
+    AgentEarning,
+    AgentPayout,
 )
-from .permissions import IsAdminUser, IsCallerUser  # type: ignore
+from .permissions import IsAdminUser, IsCallerUser, IsAgentUser  # type: ignore
 # pyrefly: ignore [missing-import]
 from .otp_service import (  # type: ignore
     create_and_send_otp,
@@ -64,7 +69,18 @@ from .serializers import (  # type: ignore
     CallReviewSerializer,
     CallRequestSerializer,
     IncomingCallSerializer,
+    AgentLoginSerializer,
+    AgentPasswordForgotSerializer,
+    AgentPasswordResetSerializer,
+    AgentProfileSerializer,
+    AgentRateSerializer,
+    AgentDutySerializer,
+    AgentEarningSerializer,
+    AgentWalletSerializer,
+    AgentPayoutSerializer,
+    AgentSessionSerializer,
 )
+
 
 
 
@@ -1435,14 +1451,20 @@ def is_agent_available(agent):
     """
     Checks if an Agent/Listener is currently available:
     - ListenerProfile.is_available must be True
+    - ListenerProfile.is_on_duty must be True
+    - ListenerProfile.is_busy must be False
     - BuddyProfile.is_busy must not be True
     - Agent must have no ongoing active or ringing call
     """
     if not agent or not agent.is_active:
         return False
 
-    if hasattr(agent, 'listener_profile') and not agent.listener_profile.is_available:
-        return False
+    if hasattr(agent, 'listener_profile'):
+        lp = agent.listener_profile
+        if not lp.is_available or lp.is_busy:
+            return False
+        if not getattr(lp, 'is_on_duty', True):
+            return False
 
     if hasattr(agent, 'buddy_profile') and agent.buddy_profile.is_busy:
         return False
@@ -1466,7 +1488,8 @@ def set_agent_busy(agent, is_busy):
 
     if hasattr(agent, 'listener_profile'):
         agent.listener_profile.is_available = not is_busy
-        agent.listener_profile.save(update_fields=['is_available'])
+        agent.listener_profile.is_busy = is_busy
+        agent.listener_profile.save(update_fields=['is_available', 'is_busy'])
 
     if hasattr(agent, 'buddy_profile'):
         agent.buddy_profile.is_busy = is_busy
@@ -1476,16 +1499,17 @@ def set_agent_busy(agent, is_busy):
 def find_available_agent_for_category(category):
     """
     Finds a suitable available Agent (Listener) for a category:
-    1. Agents whose BuddyProfile profession matches category
+    1. Agents whose ListenerProfile or BuddyProfile profession matches category
     2. Agents whose ListenerProfile interests match category name
-    3. Any active available listener
+    3. Any active available agent/listener
     4. Auto-creates standard test listener if no listeners exist
     """
-    # 1. Check BuddyProfile with matching profession or Listener interests
+    # 1. Check matching profession or interests
     candidates = User.objects.filter(
-        role__in=['LISTENER', 'BUDDY'],
+        role__in=['LISTENER', 'BUDDY', 'AGENT'],
         is_active=True
     ).filter(
+        Q(listener_profile__profession=category) |
         Q(buddy_profile__profession=category) |
         Q(listener_profile__interests__icontains=category.name)
     ).distinct()
@@ -1494,9 +1518,9 @@ def find_available_agent_for_category(category):
         if is_agent_available(agent):
             return agent
 
-    # 2. General fallback: Any available active listener
+    # 2. General fallback: Any available active agent/listener
     general_agents = User.objects.filter(
-        role__in=['LISTENER', 'BUDDY'],
+        role__in=['LISTENER', 'BUDDY', 'AGENT'],
         is_active=True
     ).order_by('id')
 
@@ -1651,27 +1675,14 @@ class IncomingCallsView(APIView):
     GET /api/calls/incoming/ (or /api/call/incoming/)
     Authentication: JWT required. Agent/Listener only.
     """
-    permission_classes = [permissions.AllowAny]
+    permission_classes = [permissions.IsAuthenticated, IsAgentUser]
 
     def get(self, request, *args, **kwargs):
-        agent = request.user if getattr(request, 'user', None) and request.user.is_authenticated else None
-        if not agent or not getattr(agent, 'is_listener', False):
-            agent_id = request.query_params.get('agent_id') or request.query_params.get('listener_id') or request.query_params.get('user_id')
-            if agent_id and str(agent_id).isdigit():
-                agent = User.objects.filter(id=int(agent_id)).first()
-            if not agent:
-                agent = User.objects.filter(role__in=['LISTENER', 'BUDDY']).first()
-
-        if not agent:
-            return Response({
-                "success": False,
-                "message": "Only agents can access incoming calls."
-            }, status=status.HTTP_403_FORBIDDEN)
-
+        agent = request.user
         calls = Call.objects.filter(
             receiver=agent,
             status__in=['PENDING', 'RINGING']
-        ).select_related('caller', 'caller__caller_profile').order_by('-created_at')
+        ).select_related('caller', 'caller__caller_profile', 'category').order_by('-created_at')
 
         serializer = IncomingCallSerializer(calls, many=True, context={'request': request})
         return Response({
@@ -1686,50 +1697,52 @@ class AcceptCallView(APIView):
     POST /api/calls/<int:call_id>/accept/
     Authentication: JWT required. Assigned Agent only.
     """
-    permission_classes = [permissions.AllowAny]
+    permission_classes = [permissions.IsAuthenticated, IsAgentUser]
 
     def post(self, request, call_id, *args, **kwargs):
-        call = Call.objects.filter(id=call_id).select_related('caller', 'receiver').first()
-        if not call:
+        with transaction.atomic():
+            call = Call.objects.select_for_update().filter(id=call_id).select_related('caller', 'receiver').first()
+            if not call:
+                return Response({
+                    "success": False,
+                    "message": "Call not found."
+                }, status=status.HTTP_404_NOT_FOUND)
+
+            if call.receiver_id != request.user.id:
+                return Response({
+                    "success": False,
+                    "message": "You are not assigned to this call."
+                }, status=status.HTTP_403_FORBIDDEN)
+
+            if call.status not in ('RINGING', 'PENDING'):
+                return Response({
+                    "success": False,
+                    "message": f"Cannot accept call in status '{call.status}'. Call must be pending/ringing."
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            now = timezone.now()
+            call.status = 'ACCEPTED'
+            call.accepted_at = now
+            call.save(update_fields=['status', 'accepted_at'])
+
+            set_agent_busy(request.user, True)
+
+            caller_name = call.caller.get_full_name() or call.caller.username
+            if hasattr(call.caller, 'caller_profile') and call.caller.caller_profile.name:
+                caller_name = call.caller.caller_profile.name
+
             return Response({
-                "success": False,
-                "message": "Call not found."
-            }, status=status.HTTP_404_NOT_FOUND)
-
-        agent = request.user if getattr(request, 'user', None) and request.user.is_authenticated else call.receiver
-        if call.receiver_id != agent.id:
-            return Response({
-                "success": False,
-                "message": "You are not assigned to this call."
-            }, status=status.HTTP_403_FORBIDDEN)
-
-        if call.status not in ('RINGING', 'PENDING'):
-            return Response({
-                "success": False,
-                "message": f"Cannot accept call in status '{call.status}'. Call must be pending/ringing."
-            }, status=status.HTTP_400_BAD_REQUEST)
-
-        now = timezone.now()
-        call.status = 'ACCEPTED'
-        call.accepted_at = now
-        call.save(update_fields=['status', 'accepted_at'])
-
-        caller_name = call.caller.get_full_name() or call.caller.username
-        if hasattr(call.caller, 'caller_profile') and call.caller.caller_profile.name:
-            caller_name = call.caller.caller_profile.name
-
-        return Response({
-            "success": True,
-            "message": "Call accepted successfully.",
-            "call_id": call.id,
-            "status": call.status,
-            "accepted_at": call.accepted_at,
-            "channel_name": call.channel_name,
-            "caller": {
-                "id": call.caller.id,
-                "name": caller_name
-            }
-        }, status=status.HTTP_200_OK)
+                "success": True,
+                "message": "Call accepted successfully.",
+                "call_id": call.id,
+                "status": call.status,
+                "accepted_at": call.accepted_at,
+                "channel_name": call.channel_name,
+                "caller": {
+                    "id": call.caller.id,
+                    "name": caller_name
+                }
+            }, status=status.HTTP_200_OK)
 
 
 class RejectCallView(APIView):
@@ -1738,43 +1751,43 @@ class RejectCallView(APIView):
     POST /api/calls/<int:call_id>/reject/
     Authentication: JWT required. Assigned Agent only.
     """
-    permission_classes = [permissions.AllowAny]
+    permission_classes = [permissions.IsAuthenticated, IsAgentUser]
 
     def post(self, request, call_id, *args, **kwargs):
-        call = Call.objects.filter(id=call_id).select_related('receiver').first()
-        if not call:
+        with transaction.atomic():
+            call = Call.objects.select_for_update().filter(id=call_id).select_related('receiver').first()
+            if not call:
+                return Response({
+                    "success": False,
+                    "message": "Call not found."
+                }, status=status.HTTP_404_NOT_FOUND)
+
+            if call.receiver_id != request.user.id:
+                return Response({
+                    "success": False,
+                    "message": "You are not assigned to this call."
+                }, status=status.HTTP_403_FORBIDDEN)
+
+            if call.status not in ('RINGING', 'PENDING'):
+                return Response({
+                    "success": False,
+                    "message": f"Cannot reject call in status '{call.status}'."
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            now = timezone.now()
+            call.status = 'REJECTED'
+            call.rejected_at = now
+            call.save(update_fields=['status', 'rejected_at'])
+
+            # Make Agent available again
+            set_agent_busy(call.receiver, False)
+
             return Response({
-                "success": False,
-                "message": "Call not found."
-            }, status=status.HTTP_404_NOT_FOUND)
-
-        agent = request.user if getattr(request, 'user', None) and request.user.is_authenticated else call.receiver
-        if call.receiver_id != agent.id:
-            return Response({
-                "success": False,
-                "message": "You are not assigned to this call."
-            }, status=status.HTTP_403_FORBIDDEN)
-
-        if call.status not in ('RINGING', 'PENDING'):
-            return Response({
-                "success": False,
-                "message": f"Cannot reject call in status '{call.status}'."
-            }, status=status.HTTP_400_BAD_REQUEST)
-
-        now = timezone.now()
-        call.status = 'REJECTED'
-        call.rejected_at = now
-        call.save(update_fields=['status', 'rejected_at'])
-
-        # Make Agent available again
-        set_agent_busy(call.receiver, False)
-
-        return Response({
-            "success": True,
-            "message": "Call rejected successfully.",
-            "call_id": call.id,
-            "status": "REJECTED"
-        }, status=status.HTTP_200_OK)
+                "success": True,
+                "message": "Call rejected successfully.",
+                "call_id": call.id,
+                "status": "REJECTED"
+            }, status=status.HTTP_200_OK)
 
 
 class StartCallView(APIView):
@@ -1783,52 +1796,52 @@ class StartCallView(APIView):
     POST /api/calls/<int:call_id>/start/
     Authentication: JWT required. Caller or assigned Agent only.
     """
-    permission_classes = [permissions.AllowAny]
+    permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request, call_id, *args, **kwargs):
-        call = Call.objects.filter(id=call_id).select_related('caller', 'receiver').first()
-        if not call:
-            return Response({
-                "success": False,
-                "message": "Call not found."
-            }, status=status.HTTP_404_NOT_FOUND)
+        with transaction.atomic():
+            call = Call.objects.select_for_update().filter(id=call_id).select_related('caller', 'receiver').first()
+            if not call:
+                return Response({
+                    "success": False,
+                    "message": "Call not found."
+                }, status=status.HTTP_404_NOT_FOUND)
 
-        user = request.user if getattr(request, 'user', None) and request.user.is_authenticated else call.caller
-        if user.id not in (call.caller_id, call.receiver_id):
-            return Response({
-                "success": False,
-                "message": "You do not belong to this call."
-            }, status=status.HTTP_403_FORBIDDEN)
+            if request.user.id not in (call.caller_id, call.receiver_id):
+                return Response({
+                    "success": False,
+                    "message": "You do not belong to this call."
+                }, status=status.HTTP_403_FORBIDDEN)
 
-        if call.status == 'ACTIVE':
+            if call.status == 'ACTIVE':
+                return Response({
+                    "success": True,
+                    "message": "Call is already active.",
+                    "call_id": call.id,
+                    "status": "ACTIVE",
+                    "start_time": call.started_at,
+                    "channel_name": call.channel_name
+                }, status=status.HTTP_200_OK)
+
+            if call.status != 'ACCEPTED':
+                return Response({
+                    "success": False,
+                    "message": f"Cannot start call in status '{call.status}'. Call must be accepted first."
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            now = timezone.now()
+            call.status = 'ACTIVE'
+            call.started_at = now
+            call.save(update_fields=['status', 'started_at'])
+
             return Response({
                 "success": True,
-                "message": "Call is already active.",
+                "message": "Call started successfully.",
                 "call_id": call.id,
                 "status": "ACTIVE",
                 "start_time": call.started_at,
                 "channel_name": call.channel_name
             }, status=status.HTTP_200_OK)
-
-        if call.status != 'ACCEPTED':
-            return Response({
-                "success": False,
-                "message": f"Cannot start call in status '{call.status}'. Call must be accepted first."
-            }, status=status.HTTP_400_BAD_REQUEST)
-
-        now = timezone.now()
-        call.status = 'ACTIVE'
-        call.started_at = now
-        call.save(update_fields=['status', 'started_at'])
-
-        return Response({
-            "success": True,
-            "message": "Call started successfully.",
-            "call_id": call.id,
-            "status": "ACTIVE",
-            "start_time": call.started_at,
-            "channel_name": call.channel_name
-        }, status=status.HTTP_200_OK)
 
 
 class EndCallView(APIView):
@@ -1837,85 +1850,113 @@ class EndCallView(APIView):
     POST /api/calls/<int:call_id>/end/
     Authentication: JWT required. Caller or assigned Agent only.
     """
-    permission_classes = [permissions.AllowAny]
+    permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request, call_id, *args, **kwargs):
-        call = Call.objects.filter(id=call_id).select_related('caller', 'receiver').first()
-        if not call:
-            return Response({
-                "success": False,
-                "message": "Call not found."
-            }, status=status.HTTP_404_NOT_FOUND)
+        with transaction.atomic():
+            call = Call.objects.select_for_update().filter(id=call_id).select_related('caller', 'receiver').first()
+            if not call:
+                return Response({
+                    "success": False,
+                    "message": "Call not found."
+                }, status=status.HTTP_404_NOT_FOUND)
 
-        user = request.user if getattr(request, 'user', None) and request.user.is_authenticated else call.caller
-        if user.id not in (call.caller_id, call.receiver_id):
-            return Response({
-                "success": False,
-                "message": "You do not belong to this call."
-            }, status=status.HTTP_403_FORBIDDEN)
+            if request.user.id not in (call.caller_id, call.receiver_id):
+                return Response({
+                    "success": False,
+                    "message": "You do not belong to this call."
+                }, status=status.HTTP_403_FORBIDDEN)
 
-        if call.status in ('COMPLETED', 'ENDED'):
+            if call.status in ('COMPLETED', 'ENDED'):
+                return Response({
+                    "success": False,
+                    "message": "Call has already been ended.",
+                    "call_id": call.id,
+                    "status": "COMPLETED",
+                    "duration": call.duration_seconds,
+                    "coins_deducted": call.coins_deducted
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            if call.status not in ('ACTIVE', 'ACCEPTED', 'RINGING', 'PENDING'):
+                return Response({
+                    "success": False,
+                    "message": f"Cannot end call in status '{call.status}'."
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            now = timezone.now()
+            call.status = 'COMPLETED'
+            call.ended_at = now
+
+            if call.started_at:
+                duration_secs = int((now - call.started_at).total_seconds())
+            else:
+                duration_secs = 0
+            call.duration_seconds = max(duration_secs, 0)
+
+            # Determine Agent rate per second (3, 5, or 10 coins/sec)
+            rate_per_second = 3
+            agent_profile = getattr(call.receiver, 'listener_profile', None) or getattr(call.receiver, 'buddy_profile', None)
+            if agent_profile and hasattr(agent_profile, 'rate_per_second') and agent_profile.rate_per_second in (3, 5, 10):
+                rate_per_second = agent_profile.rate_per_second
+
+            coins_to_deduct = call.duration_seconds * rate_per_second
+            actual_deducted = 0
+
+            if coins_to_deduct > 0:
+                caller_wallet, _ = Wallet.objects.select_for_update().get_or_create(user=call.caller, defaults={'balance': 50})
+                actual_deducted = min(caller_wallet.balance, coins_to_deduct)
+                if actual_deducted > 0:
+                    caller_wallet.balance -= actual_deducted
+                    caller_wallet.save(update_fields=['balance'])
+                    WalletTransaction.objects.create(
+                        wallet=caller_wallet,
+                        transaction_type='DEBIT',
+                        amount=actual_deducted,
+                        description=f"Call #{call.id} with {call.receiver.username} ({call.duration_seconds}s @ {rate_per_second} coins/s)"
+                    )
+
+            call.coins_deducted = actual_deducted
+            call.save(update_fields=['status', 'ended_at', 'duration_seconds', 'coins_deducted'])
+
+            # Credit Agent Wallet and log AgentEarning
+            if actual_deducted > 0:
+                agent_wallet, _ = AgentWallet.objects.select_for_update().get_or_create(agent=call.receiver)
+                agent_wallet.balance += actual_deducted
+                agent_wallet.total_earned += actual_deducted
+                agent_wallet.save(update_fields=['balance', 'total_earned', 'updated_at'])
+
+                AgentEarning.objects.create(
+                    agent=call.receiver,
+                    call=call,
+                    amount=actual_deducted,
+                    rate_per_second=rate_per_second,
+                    duration_seconds=call.duration_seconds
+                )
+
+            # Update Agent stats on ListenerProfile
+            if hasattr(call.receiver, 'listener_profile'):
+                lp = call.receiver.listener_profile
+                lp.total_calls = (lp.total_calls or 0) + 1
+                lp.total_earned_coins = (lp.total_earned_coins or 0) + actual_deducted
+                lp.is_busy = False
+                lp.is_available = lp.is_on_duty
+                lp.save(update_fields=['total_calls', 'total_earned_coins', 'is_busy', 'is_available'])
+
+            # Make Agent available again
+            set_agent_busy(call.receiver, False)
+
             return Response({
-                "success": False,
-                "message": "Call has already been ended.",
+                "success": True,
+                "message": "Call ended successfully.",
                 "call_id": call.id,
                 "status": "COMPLETED",
-                "duration": call.duration_seconds
-            }, status=status.HTTP_400_BAD_REQUEST)
-
-        if call.status not in ('ACTIVE', 'ACCEPTED', 'RINGING'):
-            return Response({
-                "success": False,
-                "message": f"Cannot end call in status '{call.status}'."
-            }, status=status.HTTP_400_BAD_REQUEST)
-
-        now = timezone.now()
-        call.status = 'COMPLETED'
-        call.ended_at = now
-
-        if call.started_at:
-            duration_secs = int((now - call.started_at).total_seconds())
-        else:
-            duration_secs = 0
-        call.duration_seconds = max(duration_secs, 0)
-
-        # Coin deduction
-        rate_per_minute = 5
-        if hasattr(call.receiver, 'buddy_profile') and call.receiver.buddy_profile.rate_per_minute:
-            rate_per_minute = call.receiver.buddy_profile.rate_per_minute
-
-        minutes = (call.duration_seconds + 59) // 60 if call.duration_seconds > 0 else 0
-        coins_to_deduct = minutes * rate_per_minute
-
-        if coins_to_deduct > 0:
-            caller_wallet, _ = Wallet.objects.get_or_create(user=call.caller, defaults={'balance': 50})
-            actual_deducted = min(caller_wallet.balance, coins_to_deduct)
-            if actual_deducted > 0:
-                caller_wallet.balance -= actual_deducted
-                caller_wallet.save(update_fields=['balance'])
-                WalletTransaction.objects.create(
-                    wallet=caller_wallet,
-                    transaction_type='DEBIT',
-                    amount=actual_deducted,
-                    description=f"Call #{call.id} with {call.receiver.username} ({call.duration_seconds}s)"
-                )
-            call.coins_deducted = actual_deducted
-
-        call.save(update_fields=['status', 'ended_at', 'duration_seconds', 'coins_deducted'])
-
-        # Make Agent available again
-        set_agent_busy(call.receiver, False)
-
-        return Response({
-            "success": True,
-            "message": "Call ended successfully.",
-            "call_id": call.id,
-            "status": "COMPLETED",
-            "duration": call.duration_seconds,
-            "coins_deducted": call.coins_deducted,
-            "start_time": call.started_at,
-            "end_time": call.ended_at
-        }, status=status.HTTP_200_OK)
+                "duration": call.duration_seconds,
+                "rate_per_second": rate_per_second,
+                "coins_deducted": call.coins_deducted,
+                "agent_earned": actual_deducted,
+                "start_time": call.started_at,
+                "end_time": call.ended_at
+            }, status=status.HTTP_200_OK)
 
 
 class CallHistoryView(APIView):
@@ -4406,6 +4447,785 @@ class ListenerDetailView(APIView):
 
     def post(self, request, identifier=None):
         return self.delete(request, identifier)
+
+
+# ==========================================
+# AGENT SYSTEM VIEWS (UNIFIED AGENT/LISTENER)
+# ==========================================
+
+class AgentLoginView(APIView):
+    """
+    Agent Login API:
+    POST /api/auth/agent/login/ and /api/agent/login/
+    Authenticates using username/email/phone + password.
+    Requires role in ('AGENT', 'LISTENER', 'BUDDY').
+    Returns JWT tokens, agent user details, and profile data.
+    """
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request):
+        return Response({
+            "success": True,
+            "message": "Agent Login endpoint. Send POST request with 'username' (or email/phone) and 'password'.",
+            "endpoint": "/api/auth/agent/login/"
+        }, status=status.HTTP_200_OK)
+
+    def post(self, request):
+        serializer = AgentLoginSerializer(data=request.data)
+        if not serializer.is_valid():
+            detail_err = serializer.errors.get('detail')
+            err_msg = detail_err[0] if detail_err else serializer.errors
+            return Response({
+                "success": False,
+                "message": str(err_msg)
+            }, status=status.HTTP_401_UNAUTHORIZED)
+
+        user = serializer.validated_data['user']
+        lp, _ = ListenerProfile.objects.get_or_create(
+            user=user,
+            defaults={
+                'listener_id': user.username,
+                'language': 'English',
+                'rate_per_second': 3,
+                'is_available': True,
+                'is_on_duty': True
+            }
+        )
+        wallet, _ = AgentWallet.objects.get_or_create(agent=user, defaults={'balance': 0})
+
+        refresh = RefreshToken.for_user(user)
+
+        return Response({
+            "success": True,
+            "message": "Agent login successful.",
+            "data": {
+                "user": {
+                    "id": user.id,
+                    "username": user.username,
+                    "email": user.email,
+                    "phone_number": user.phone_number,
+                    "role": user.role,
+                    "is_agent": True,
+                    "is_active": user.is_active,
+                },
+                "profile": AgentProfileSerializer(lp, context={'request': request}).data,
+                "wallet": {
+                    "balance": wallet.balance,
+                    "total_earned": wallet.total_earned
+                },
+                "tokens": {
+                    "access": str(refresh.access_token),
+                    "refresh": str(refresh)
+                }
+            }
+        }, status=status.HTTP_200_OK)
+
+
+class AgentLogoutView(APIView):
+    """
+    Agent Logout API:
+    POST /api/auth/agent/logout/ and /api/agent/logout/
+    Authentication: JWT required.
+    Ends any active duty session and blacklists refresh token.
+    """
+    permission_classes = [permissions.IsAuthenticated, IsAgentUser]
+
+    def post(self, request):
+        agent = request.user
+        now = timezone.now()
+
+        # Close any open duty session
+        open_sessions = AgentDutySession.objects.filter(agent=agent, ended_at__isnull=True)
+        for sess in open_sessions:
+            sess.ended_at = now
+            sess.duration_seconds = max(int((now - sess.started_at).total_seconds()), 0)
+            sess.save(update_fields=['ended_at', 'duration_seconds'])
+
+        # Set duty and availability to False
+        if hasattr(agent, 'listener_profile'):
+            agent.listener_profile.is_on_duty = False
+            agent.listener_profile.is_available = False
+            agent.listener_profile.is_busy = False
+            agent.listener_profile.save(update_fields=['is_on_duty', 'is_available', 'is_busy'])
+
+        # Blacklist token if provided
+        refresh_token = request.data.get('refresh') or request.data.get('refresh_token')
+        if refresh_token:
+            try:
+                token = RefreshToken(refresh_token)
+                token.blacklist()
+            except Exception:
+                pass
+
+        return Response({
+            "success": True,
+            "message": "Agent logged out successfully. Duty ended."
+        }, status=status.HTTP_200_OK)
+
+
+class AgentForgotPasswordView(APIView):
+    """
+    Agent Forgot Password API:
+    POST /api/agent/password/forgot/
+    Generates a password reset token for registered Agent.
+    """
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request):
+        serializer = AgentPasswordForgotSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response({
+                "success": False,
+                "message": serializer.errors
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        identifier = serializer.validated_data.get('identifier')
+        user = User.objects.filter(
+            Q(email__iexact=identifier) | Q(username__iexact=identifier) | Q(phone_number=identifier),
+            role__in=['AGENT', 'LISTENER', 'BUDDY']
+        ).first()
+
+        if not user:
+            return Response({
+                "success": False,
+                "message": f"No active Agent found matching '{identifier}'."
+            }, status=status.HTTP_404_NOT_FOUND)
+
+        token = default_token_generator.make_token(user)
+
+        return Response({
+            "success": True,
+            "message": "Password reset token generated successfully. In production this is sent via SMS/Email.",
+            "reset_token": token,
+            "identifier": identifier
+        }, status=status.HTTP_200_OK)
+
+
+class AgentResetPasswordView(APIView):
+    """
+    Agent Reset Password API:
+    POST /api/agent/password/reset/
+    Resets password using token and identifier.
+    """
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request):
+        serializer = AgentPasswordResetSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response({
+                "success": False,
+                "message": serializer.errors
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        identifier = serializer.validated_data.get('identifier')
+        token = serializer.validated_data.get('token')
+        new_password = serializer.validated_data.get('new_password')
+
+        user = User.objects.filter(
+            Q(email__iexact=identifier) | Q(username__iexact=identifier) | Q(phone_number=identifier),
+            role__in=['AGENT', 'LISTENER', 'BUDDY']
+        ).first()
+
+        if not user:
+            return Response({
+                "success": False,
+                "message": "Agent account not found."
+            }, status=status.HTTP_404_NOT_FOUND)
+
+        if not default_token_generator.check_token(user, token):
+            return Response({
+                "success": False,
+                "message": "Invalid or expired reset token."
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        user.set_password(new_password)
+        user.save(update_fields=['password'])
+
+        return Response({
+            "success": True,
+            "message": "Password reset successfully. You can now login with your new password."
+        }, status=status.HTTP_200_OK)
+
+
+class AgentProfileView(APIView):
+    """
+    Agent Profile API:
+    GET /api/agent/profile/ - Retrieve full agent profile
+    PUT / PATCH /api/agent/profile/ - Update editable fields (name, bio, profession_id, avatar, etc.)
+    Authentication: JWT required. Agent only.
+    """
+    permission_classes = [permissions.IsAuthenticated, IsAgentUser]
+
+    def get(self, request):
+        lp, _ = ListenerProfile.objects.get_or_create(
+            user=request.user,
+            defaults={
+                'listener_id': request.user.username,
+                'rate_per_second': 3,
+                'language': 'English'
+            }
+        )
+        serializer = AgentProfileSerializer(lp, context={'request': request})
+        return Response({
+            "success": True,
+            "data": serializer.data
+        }, status=status.HTTP_200_OK)
+
+    def patch(self, request):
+        return self._update(request, partial=True)
+
+    def put(self, request):
+        return self._update(request, partial=False)
+
+    def _update(self, request, partial=True):
+        lp, _ = ListenerProfile.objects.get_or_create(
+            user=request.user,
+            defaults={'listener_id': request.user.username}
+        )
+        serializer = AgentProfileSerializer(lp, data=request.data, partial=partial, context={'request': request})
+        if serializer.is_valid():
+            serializer.save()
+            return Response({
+                "success": True,
+                "message": "Profile updated successfully.",
+                "data": serializer.data
+            }, status=status.HTTP_200_OK)
+        return Response({
+            "success": False,
+            "errors": serializer.errors
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+
+class AgentProfessionsView(APIView):
+    """
+    Agent Professions / Categories API:
+    GET /api/agent/professions/
+    Returns list of categories/professions available for Agent selection.
+    """
+    permission_classes = [permissions.IsAuthenticated, IsAgentUser]
+
+    def get(self, request):
+        categories = Category.objects.filter(is_active=True).order_by('order', 'name')
+        data = [
+            {
+                "id": c.id,
+                "name": c.name,
+                "icon": c.icon or "",
+                "image": request.build_absolute_uri(c.image.url) if c.image and hasattr(c.image, 'url') else None,
+                "description": c.description or ""
+            }
+            for c in categories
+        ]
+        return Response({
+            "success": True,
+            "count": len(data),
+            "professions": data
+        }, status=status.HTTP_200_OK)
+
+
+class AgentRateView(APIView):
+    """
+    Agent Rate per Second API:
+    GET /api/agent/rate/ - Get current rate per second
+    POST / PUT /api/agent/rate/ - Update rate per second (allowed: 3, 5, 10 Coins/sec)
+    """
+    permission_classes = [permissions.IsAuthenticated, IsAgentUser]
+
+    def get(self, request):
+        lp = getattr(request.user, 'listener_profile', None)
+        rate = lp.rate_per_second if lp else 3
+        return Response({
+            "success": True,
+            "rate_per_second": rate,
+            "allowed_rates": [3, 5, 10]
+        }, status=status.HTTP_200_OK)
+
+    def post(self, request):
+        return self._set_rate(request)
+
+    def put(self, request):
+        return self._set_rate(request)
+
+    def _set_rate(self, request):
+        serializer = AgentRateSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response({
+                "success": False,
+                "message": serializer.errors
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        rate = serializer.validated_data['rate_per_second']
+        lp, _ = ListenerProfile.objects.get_or_create(
+            user=request.user,
+            defaults={'listener_id': request.user.username}
+        )
+        lp.rate_per_second = rate
+        lp.rate_per_minute = rate * 60
+        lp.save(update_fields=['rate_per_second', 'rate_per_minute'])
+
+        # Also update legacy buddy profile if exists
+        if hasattr(request.user, 'buddy_profile'):
+            bp = request.user.buddy_profile
+            bp.rate_per_minute = rate * 60
+            bp.save(update_fields=['rate_per_minute'])
+
+        return Response({
+            "success": True,
+            "message": f"Agent rate set to {rate} coins/second successfully.",
+            "rate_per_second": rate
+        }, status=status.HTTP_200_OK)
+
+
+class AgentDutyView(APIView):
+    """
+    Agent Duty Status API:
+    GET /api/agent/duty/ - Check duty status and today's duty duration
+    POST /api/agent/duty/ - Toggle duty state with {"is_on_duty": true/false}
+    """
+    permission_classes = [permissions.IsAuthenticated, IsAgentUser]
+
+    def get(self, request):
+        agent = request.user
+        lp = getattr(agent, 'listener_profile', None)
+        is_on_duty = lp.is_on_duty if lp else False
+
+        active_session = AgentDutySession.objects.filter(agent=agent, ended_at__isnull=True).order_by('-started_at').first()
+        active_session_data = None
+        if active_session:
+            now = timezone.now()
+            current_duration = int((now - active_session.started_at).total_seconds())
+            active_session_data = {
+                "id": active_session.id,
+                "started_at": active_session.started_at,
+                "current_duration_seconds": max(current_duration, 0)
+            }
+
+        today_start = timezone.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        today_sessions = AgentDutySession.objects.filter(agent=agent, started_at__gte=today_start)
+        total_seconds = 0
+        now = timezone.now()
+        for s in today_sessions:
+            if s.ended_at:
+                total_seconds += s.duration_seconds
+            else:
+                total_seconds += max(int((now - s.started_at).total_seconds()), 0)
+
+        return Response({
+            "success": True,
+            "is_on_duty": is_on_duty,
+            "is_busy": lp.is_busy if lp else False,
+            "active_session": active_session_data,
+            "today_duty_seconds": total_seconds
+        }, status=status.HTTP_200_OK)
+
+    def post(self, request):
+        serializer = AgentDutySerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response({
+                "success": False,
+                "message": serializer.errors
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        is_on_duty = serializer.validated_data['is_on_duty']
+        if is_on_duty:
+            return AgentDutyOnView().post(request)
+        else:
+            return AgentDutyOffView().post(request)
+
+
+class AgentDutyOnView(APIView):
+    """
+    Agent Duty ON API:
+    POST /api/agent/duty/on/
+    Marks Agent ON duty, available for incoming calls, and starts duty session timer.
+    """
+    permission_classes = [permissions.IsAuthenticated, IsAgentUser]
+
+    def post(self, request):
+        agent = request.user
+        lp, _ = ListenerProfile.objects.get_or_create(
+            user=agent,
+            defaults={'listener_id': agent.username}
+        )
+        now = timezone.now()
+
+        lp.is_on_duty = True
+        lp.is_available = True
+        lp.save(update_fields=['is_on_duty', 'is_available'])
+
+        # Close any orphaned sessions
+        AgentDutySession.objects.filter(agent=agent, ended_at__isnull=True).update(ended_at=now)
+
+        # Create new duty session
+        session = AgentDutySession.objects.create(
+            agent=agent,
+            started_at=now
+        )
+
+        return Response({
+            "success": True,
+            "message": "Agent is now ON duty and ready to receive calls.",
+            "is_on_duty": True,
+            "session_id": session.id,
+            "started_at": session.started_at
+        }, status=status.HTTP_200_OK)
+
+
+class AgentDutyOffView(APIView):
+    """
+    Agent Duty OFF API:
+    POST /api/agent/duty/off/
+    Marks Agent OFF duty, unavailable for calls, closes open duty session and returns total time.
+    """
+    permission_classes = [permissions.IsAuthenticated, IsAgentUser]
+
+    def post(self, request):
+        agent = request.user
+        lp = getattr(agent, 'listener_profile', None)
+        now = timezone.now()
+
+        if lp:
+            lp.is_on_duty = False
+            lp.is_available = False
+            lp.is_busy = False
+            lp.save(update_fields=['is_on_duty', 'is_available', 'is_busy'])
+
+        # Close active duty session
+        active_sessions = AgentDutySession.objects.filter(agent=agent, ended_at__isnull=True)
+        closed_duration = 0
+        for s in active_sessions:
+            s.ended_at = now
+            s.duration_seconds = max(int((now - s.started_at).total_seconds()), 0)
+            s.save(update_fields=['ended_at', 'duration_seconds'])
+            closed_duration += s.duration_seconds
+
+        today_start = timezone.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        today_total = AgentDutySession.objects.filter(
+            agent=agent,
+            started_at__gte=today_start
+        ).aggregate(models.Sum('duration_seconds'))['duration_seconds__sum'] or 0
+
+        return Response({
+            "success": True,
+            "message": "Agent is now OFF duty.",
+            "is_on_duty": False,
+            "last_session_duration_seconds": closed_duration,
+            "today_duty_seconds": today_total
+        }, status=status.HTTP_200_OK)
+
+
+class AgentDashboardView(APIView):
+    """
+    Agent Dashboard API:
+    GET /api/agent/dashboard/
+    Returns real-time aggregated stats for the authenticated Agent:
+    - Profile details, status, rating
+    - Today's earnings and lifetime earnings
+    - Duty status & duration
+    - Total calls & today's calls
+    - Recent call sessions
+    """
+    permission_classes = [permissions.IsAuthenticated, IsAgentUser]
+
+    def get(self, request):
+        agent = request.user
+        lp, _ = ListenerProfile.objects.get_or_create(
+            user=agent,
+            defaults={'listener_id': agent.username, 'rate_per_second': 3}
+        )
+        wallet, _ = AgentWallet.objects.get_or_create(agent=agent, defaults={'balance': 0})
+
+        now = timezone.now()
+        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+        # Today's earnings
+        today_earnings_sum = AgentEarning.objects.filter(
+            agent=agent,
+            created_at__gte=today_start
+        ).aggregate(models.Sum('amount'))['amount__sum'] or 0
+
+        # Today's calls
+        today_calls_count = Call.objects.filter(
+            receiver=agent,
+            status='COMPLETED',
+            ended_at__gte=today_start
+        ).count()
+
+        # Duty today
+        today_duty_seconds = AgentDutySession.objects.filter(
+            agent=agent,
+            started_at__gte=today_start
+        ).aggregate(models.Sum('duration_seconds'))['duration_seconds__sum'] or 0
+
+        # Active duty session
+        active_session = AgentDutySession.objects.filter(agent=agent, ended_at__isnull=True).order_by('-started_at').first()
+        active_session_seconds = 0
+        if active_session:
+            active_session_seconds = max(int((now - active_session.started_at).total_seconds()), 0)
+
+        # Recent calls (last 5)
+        recent_calls = Call.objects.filter(
+            receiver=agent,
+            status='COMPLETED'
+        ).select_related('caller', 'category').order_by('-ended_at')[:5]
+
+        recent_calls_data = []
+        for c in recent_calls:
+            caller_name = c.caller.get_full_name() or c.caller.username
+            if hasattr(c.caller, 'caller_profile') and c.caller.caller_profile.name:
+                caller_name = c.caller.caller_profile.name
+            recent_calls_data.append({
+                "call_id": c.id,
+                "caller_name": caller_name,
+                "duration_seconds": c.duration_seconds,
+                "coins_earned": c.coins_deducted,
+                "category": c.category.name if c.category else "General",
+                "ended_at": c.ended_at
+            })
+
+        return Response({
+            "success": True,
+            "data": {
+                "profile": {
+                    "id": agent.id,
+                    "name": lp.name or agent.get_full_name() or agent.username,
+                    "username": agent.username,
+                    "email": agent.email,
+                    "phone_number": agent.phone_number,
+                    "profession": lp.profession.name if lp.profession else (lp.interests or "Buddy Agent"),
+                    "bio": lp.bio,
+                    "rate_per_second": lp.rate_per_second,
+                    "rating": float(lp.rating),
+                    "is_on_duty": lp.is_on_duty,
+                    "is_busy": lp.is_busy,
+                    "is_verified": lp.is_verified,
+                    "avatar": request.build_absolute_uri(lp.avatar.url) if lp.avatar and hasattr(lp.avatar, 'url') else None
+                },
+                "duty": {
+                    "is_on_duty": lp.is_on_duty,
+                    "active_session_seconds": active_session_seconds,
+                    "today_duty_seconds": today_duty_seconds + active_session_seconds
+                },
+                "earnings": {
+                    "today_coins": today_earnings_sum,
+                    "lifetime_coins": wallet.total_earned,
+                    "wallet_balance": wallet.balance
+                },
+                "calls": {
+                    "today_count": today_calls_count,
+                    "lifetime_count": lp.total_calls
+                },
+                "recent_sessions": recent_calls_data
+            }
+        }, status=status.HTTP_200_OK)
+
+
+class AgentEarningsTodayView(APIView):
+    """
+    Agent Today's Earnings API:
+    GET /api/agent/earnings/today/
+    Returns list of earnings from sessions handled today.
+    """
+    permission_classes = [permissions.IsAuthenticated, IsAgentUser]
+
+    def get(self, request):
+        today_start = timezone.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        earnings = AgentEarning.objects.filter(
+            agent=request.user,
+            created_at__gte=today_start
+        ).select_related('call', 'call__caller').order_by('-created_at')
+
+        total_coins = earnings.aggregate(models.Sum('amount'))['amount__sum'] or 0
+        serializer = AgentEarningSerializer(earnings, many=True)
+
+        return Response({
+            "success": True,
+            "today_total_coins": total_coins,
+            "count": len(earnings),
+            "earnings": serializer.data
+        }, status=status.HTTP_200_OK)
+
+
+class AgentEarningsHistoryView(APIView):
+    """
+    Agent Earnings History API:
+    GET /api/agent/earnings/
+    Paginated list of historical earnings with optional start_date and end_date filtering.
+    """
+    permission_classes = [permissions.IsAuthenticated, IsAgentUser]
+
+    def get(self, request):
+        earnings = AgentEarning.objects.filter(agent=request.user).select_related('call', 'call__caller').order_by('-created_at')
+
+        start_date = request.query_params.get('start_date')
+        end_date = request.query_params.get('end_date')
+
+        if start_date:
+            earnings = earnings.filter(created_at__date__gte=start_date)
+        if end_date:
+            earnings = earnings.filter(created_at__date__lte=end_date)
+
+        total_amount = earnings.aggregate(models.Sum('amount'))['amount__sum'] or 0
+
+        page = int(request.query_params.get('page', 1))
+        page_size = int(request.query_params.get('page_size', 20))
+        start_idx = (page - 1) * page_size
+        end_idx = start_idx + page_size
+
+        total_count = earnings.count()
+        paginated_earnings = earnings[start_idx:end_idx]
+
+        serializer = AgentEarningSerializer(paginated_earnings, many=True)
+        return Response({
+            "success": True,
+            "total_count": total_count,
+            "total_coins": total_amount,
+            "page": page,
+            "page_size": page_size,
+            "earnings": serializer.data
+        }, status=status.HTTP_200_OK)
+
+
+class AgentWalletView(APIView):
+    """
+    Agent Wallet API:
+    GET /api/agent/wallet/
+    Returns current balance, total earnings, total withdrawn, and recent payouts.
+    """
+    permission_classes = [permissions.IsAuthenticated, IsAgentUser]
+
+    def get(self, request):
+        wallet, _ = AgentWallet.objects.get_or_create(agent=request.user, defaults={'balance': 0})
+        serializer = AgentWalletSerializer(wallet)
+        return Response({
+            "success": True,
+            "data": serializer.data
+        }, status=status.HTTP_200_OK)
+
+
+class AgentPayoutView(APIView):
+    """
+    Agent Payout API:
+    GET /api/agent/payouts/ - View payout request history
+    POST /api/agent/payouts/ - Request a payout (deducts from wallet balance atomically)
+    """
+    permission_classes = [permissions.IsAuthenticated, IsAgentUser]
+
+    def get(self, request):
+        payouts = AgentPayout.objects.filter(agent=request.user).order_by('-created_at')
+        serializer = AgentPayoutSerializer(payouts, many=True)
+        return Response({
+            "success": True,
+            "count": len(payouts),
+            "payouts": serializer.data
+        }, status=status.HTTP_200_OK)
+
+    def post(self, request):
+        serializer = AgentPayoutSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response({
+                "success": False,
+                "message": serializer.errors
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        amount = serializer.validated_data['amount']
+        payout_method = serializer.validated_data['payout_method']
+        details = serializer.validated_data.get('details', {})
+
+        if amount <= 0:
+            return Response({
+                "success": False,
+                "message": "Payout amount must be greater than zero."
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        with transaction.atomic():
+            wallet, _ = AgentWallet.objects.select_for_update().get_or_create(agent=request.user)
+            if wallet.balance < amount:
+                return Response({
+                    "success": False,
+                    "message": f"Insufficient wallet balance. Current balance: {wallet.balance} coins."
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            wallet.balance -= amount
+            wallet.total_withdrawn += amount
+            wallet.save(update_fields=['balance', 'total_withdrawn', 'updated_at'])
+
+            payout = AgentPayout.objects.create(
+                agent=request.user,
+                amount=amount,
+                payout_method=payout_method,
+                details=details,
+                status='REQUESTED'
+            )
+
+        return Response({
+            "success": True,
+            "message": f"Payout request for {amount} coins submitted successfully.",
+            "payout": AgentPayoutSerializer(payout).data,
+            "remaining_balance": wallet.balance
+        }, status=status.HTTP_201_CREATED)
+
+
+class AgentRatingView(APIView):
+    """
+    Agent Rating & Reviews API:
+    GET /api/agent/rating/ and /api/agent/reviews/
+    Returns rating score, star distribution breakdown, and reviews from Callers.
+    """
+    permission_classes = [permissions.IsAuthenticated, IsAgentUser]
+
+    def get(self, request):
+        agent = request.user
+        reviews = CallReview.objects.filter(call__receiver=agent).select_related('call', 'call__caller').order_by('-created_at')
+
+        total_reviews = reviews.count()
+        avg_rating = reviews.aggregate(models.Avg('rating'))['rating__avg'] or 5.0
+        avg_rating = round(float(avg_rating), 2)
+
+        breakdown = {star: reviews.filter(rating=star).count() for star in range(1, 6)}
+
+        reviews_list = [
+            {
+                "id": r.id,
+                "call_id": r.call.id,
+                "rating": r.rating,
+                "feedback": r.feedback,
+                "caller_name": r.call.caller.get_full_name() or r.call.caller.username,
+                "created_at": r.created_at
+            }
+            for r in reviews[:20]
+        ]
+
+        return Response({
+            "success": True,
+            "average_rating": avg_rating,
+            "total_reviews": total_reviews,
+            "rating_breakdown": breakdown,
+            "recent_reviews": reviews_list
+        }, status=status.HTTP_200_OK)
+
+
+class AgentRecentSessionsView(APIView):
+    """
+    Agent Recent Handled Sessions API:
+    GET /api/agent/sessions/recent/
+    Returns the recent completed call sessions handled by the Agent.
+    """
+    permission_classes = [permissions.IsAuthenticated, IsAgentUser]
+
+    def get(self, request):
+        calls = Call.objects.filter(
+            receiver=request.user,
+            status='COMPLETED'
+        ).select_related('caller', 'caller__caller_profile', 'category').order_by('-ended_at')[:20]
+
+        serializer = AgentSessionSerializer(calls, many=True)
+        return Response({
+            "success": True,
+            "count": len(calls),
+            "sessions": serializer.data
+        }, status=status.HTTP_200_OK)
+
 
 
 

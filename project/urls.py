@@ -593,6 +593,7 @@ urlpatterns = [
     path('api/api/callerprofileview', CallerProfileView.as_view()),
 
     # Standard App routing
+    path('api/api/', include('core.urls')),
     path('api/', include('core.urls')),
     path('', include('core.urls')),
 ]

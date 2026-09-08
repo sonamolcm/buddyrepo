@@ -44,3 +44,19 @@ class IsAdminUser(permissions.BasePermission):
             request.user.is_authenticated and
             request.user.is_admin
         )
+
+
+class IsAgentUser(permissions.BasePermission):
+    """
+    Permission check: User is authenticated and has the AGENT/LISTENER role.
+    Callers and unauthenticated users cannot access Agent-only endpoints.
+    """
+    message = "Access restricted to Agent accounts only."
+
+    def has_permission(self, request, view):
+        return bool(
+            request.user and
+            request.user.is_authenticated and
+            (getattr(request.user, 'is_agent', False) or getattr(request.user, 'is_listener', False) or request.user.role in ('AGENT', 'LISTENER', 'BUDDY'))
+        )
+

@@ -17,6 +17,10 @@ from .models import (
     CallReview,
     Notification,
     CallerFavorite,
+    AgentDutySession,
+    AgentWallet,
+    AgentEarning,
+    AgentPayout,
 )
 
 # Admin Site Header Branding
@@ -121,17 +125,17 @@ class CallerProfileAdmin(admin.ModelAdmin):
 
 @admin.register(ListenerProfile)
 class ListenerProfileAdmin(admin.ModelAdmin):
-    list_display = ('listener_id', 'get_name', 'get_username', 'gender', 'language', 'is_available', 'get_is_active', 'created_at')
-    list_filter = ('language', 'gender', 'is_available', 'user__is_active')
-    search_fields = ('listener_id', 'name', 'user__username')
-    list_editable = ('is_available',)
-    fields = ('user', 'listener_id', 'name', 'gender', 'language', 'interests', 'profile_picture', 'is_available')
+    list_display = ('listener_id', 'get_name', 'get_username', 'profession', 'rate_per_second', 'is_on_duty', 'is_busy', 'is_available', 'is_verified', 'rating', 'total_calls', 'total_earned_coins', 'created_at')
+    list_filter = ('is_on_duty', 'is_busy', 'is_available', 'is_verified', 'rate_per_second', 'language', 'gender')
+    search_fields = ('listener_id', 'name', 'user__username', 'profession__name')
+    list_editable = ('is_available', 'is_on_duty', 'rate_per_second')
+    fields = ('user', 'listener_id', 'name', 'gender', 'language', 'profession', 'bio', 'interests', 'rate_per_second', 'rate_per_minute', 'avatar', 'profile_picture', 'is_available', 'is_on_duty', 'is_busy', 'is_verified', 'rating', 'total_calls', 'total_earned_coins')
 
     def save_model(self, request, form, change):
         super().save_model(request, form, change)
         if form.instance.user:
-            if form.instance.user.role != 'LISTENER':
-                form.instance.user.role = 'LISTENER'
+            if form.instance.user.role not in ('LISTENER', 'AGENT', 'BUDDY'):
+                form.instance.user.role = 'AGENT'
                 form.instance.user.save(update_fields=['role'])
             if not form.instance.user.is_profile_completed:
                 form.instance.user.is_profile_completed = True
@@ -219,3 +223,31 @@ class CallerFavoriteAdmin(admin.ModelAdmin):
     list_display = ('id', 'caller', 'agent', 'created_at')
     list_filter = ('created_at',)
     search_fields = ('caller__username', 'caller__phone_number', 'agent__username', 'agent__phone_number')
+
+
+@admin.register(AgentDutySession)
+class AgentDutySessionAdmin(admin.ModelAdmin):
+    list_display = ('id', 'agent', 'started_at', 'ended_at', 'duration_seconds')
+    list_filter = ('started_at', 'ended_at')
+    search_fields = ('agent__username', 'agent__phone_number')
+
+
+@admin.register(AgentWallet)
+class AgentWalletAdmin(admin.ModelAdmin):
+    list_display = ('agent', 'balance', 'total_earned', 'total_withdrawn', 'updated_at')
+    search_fields = ('agent__username', 'agent__phone_number')
+    list_filter = ('updated_at',)
+
+
+@admin.register(AgentEarning)
+class AgentEarningAdmin(admin.ModelAdmin):
+    list_display = ('id', 'agent', 'call', 'amount', 'rate_per_second', 'duration_seconds', 'created_at')
+    list_filter = ('rate_per_second', 'created_at')
+    search_fields = ('agent__username', 'call__id')
+
+
+@admin.register(AgentPayout)
+class AgentPayoutAdmin(admin.ModelAdmin):
+    list_display = ('id', 'agent', 'amount', 'payout_method', 'status', 'created_at')
+    list_filter = ('status', 'payout_method', 'created_at')
+    search_fields = ('agent__username', 'payout_method')

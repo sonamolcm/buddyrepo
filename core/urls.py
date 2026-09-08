@@ -69,6 +69,24 @@ from .views import (  # type: ignore
     ListenerDetailView,
     ListenerDeleteView,
     ListenerDeleteDirectView,
+    # Agent System APIs
+    AgentLoginView,
+    AgentLogoutView,
+    AgentForgotPasswordView,
+    AgentResetPasswordView,
+    AgentProfileView,
+    AgentProfessionsView,
+    AgentRateView,
+    AgentDutyView,
+    AgentDutyOnView,
+    AgentDutyOffView,
+    AgentDashboardView,
+    AgentEarningsTodayView,
+    AgentEarningsHistoryView,
+    AgentWalletView,
+    AgentPayoutView,
+    AgentRatingView,
+    AgentRecentSessionsView,
 )
 
 urlpatterns = [
@@ -372,4 +390,63 @@ urlpatterns = [
     path('listeners/<str:identifier>', ListenerDetailView.as_view()),
     path('listeners/<str:identifier>/delete/', ListenerDeleteDirectView.as_view(), name='listener-detail-delete'),
     path('listeners/<str:identifier>/delete', ListenerDeleteDirectView.as_view()),
+
+    # ==========================================
+    # 10. AGENT SYSTEM ROUTES
+    # ==========================================
+    # Agent Authentication
+    path('auth/agent/login/', AgentLoginView.as_view(), name='agent-login'),
+    path('auth/agent/login', AgentLoginView.as_view()),
+    path('agent/login/', AgentLoginView.as_view(), name='agent-login-short'),
+    path('agent/login', AgentLoginView.as_view()),
+    path('auth/agent/logout/', AgentLogoutView.as_view(), name='agent-logout'),
+    path('auth/agent/logout', AgentLogoutView.as_view()),
+    path('agent/logout/', AgentLogoutView.as_view(), name='agent-logout-short'),
+    path('agent/logout', AgentLogoutView.as_view()),
+    path('agent/password/forgot/', AgentForgotPasswordView.as_view(), name='agent-password-forgot'),
+    path('agent/password/forgot', AgentForgotPasswordView.as_view()),
+    path('auth/agent/password/forgot/', AgentForgotPasswordView.as_view()),
+    path('auth/agent/password/forgot', AgentForgotPasswordView.as_view()),
+    path('agent/password/reset/', AgentResetPasswordView.as_view(), name='agent-password-reset'),
+    path('agent/password/reset', AgentResetPasswordView.as_view()),
+    path('auth/agent/password/reset/', AgentResetPasswordView.as_view()),
+    path('auth/agent/password/reset', AgentResetPasswordView.as_view()),
+
+    # Agent Profile & Settings
+    path('agent/profile/', AgentProfileView.as_view(), name='agent-profile'),
+    path('agent/profile', AgentProfileView.as_view()),
+    path('agent/professions/', AgentProfessionsView.as_view(), name='agent-professions'),
+    path('agent/professions', AgentProfessionsView.as_view()),
+    path('agent/rate/', AgentRateView.as_view(), name='agent-rate'),
+    path('agent/rate', AgentRateView.as_view()),
+
+    # Duty & Session Tracking
+    path('agent/duty/', AgentDutyView.as_view(), name='agent-duty'),
+    path('agent/duty', AgentDutyView.as_view()),
+    path('agent/duty/on/', AgentDutyOnView.as_view(), name='agent-duty-on'),
+    path('agent/duty/on', AgentDutyOnView.as_view()),
+    path('agent/duty/off/', AgentDutyOffView.as_view(), name='agent-duty-off'),
+    path('agent/duty/off', AgentDutyOffView.as_view()),
+
+    # Dashboard & Statistics
+    path('agent/dashboard/', AgentDashboardView.as_view(), name='agent-dashboard'),
+    path('agent/dashboard', AgentDashboardView.as_view()),
+
+    # Earnings & Wallet
+    path('agent/earnings/today/', AgentEarningsTodayView.as_view(), name='agent-earnings-today'),
+    path('agent/earnings/today', AgentEarningsTodayView.as_view()),
+    path('agent/earnings/', AgentEarningsHistoryView.as_view(), name='agent-earnings-history'),
+    path('agent/earnings', AgentEarningsHistoryView.as_view()),
+    path('agent/wallet/', AgentWalletView.as_view(), name='agent-wallet'),
+    path('agent/wallet', AgentWalletView.as_view()),
+    path('agent/payouts/', AgentPayoutView.as_view(), name='agent-payouts'),
+    path('agent/payouts', AgentPayoutView.as_view()),
+
+    # Ratings, Reviews & Sessions
+    path('agent/rating/', AgentRatingView.as_view(), name='agent-rating'),
+    path('agent/rating', AgentRatingView.as_view()),
+    path('agent/reviews/', AgentRatingView.as_view(), name='agent-reviews'),
+    path('agent/reviews', AgentRatingView.as_view()),
+    path('agent/sessions/recent/', AgentRecentSessionsView.as_view(), name='agent-sessions-recent'),
+    path('agent/sessions/recent', AgentRecentSessionsView.as_view()),
 ]
