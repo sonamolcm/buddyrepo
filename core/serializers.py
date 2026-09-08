@@ -1035,11 +1035,17 @@ class AgentDutySerializer(serializers.Serializer):
 
 class AgentEarningSerializer(serializers.ModelSerializer):
     call_id = serializers.ReadOnlyField(source='call.id')
-    call_type = serializers.CharField(read_only=True)
+    call_type = serializers.SerializerMethodField()
+    amount = serializers.ReadOnlyField(source='coins')
 
     class Meta:
         model = AgentEarning
-        fields = ('id', 'earning_type', 'coins', 'description', 'call_id', 'call_type', 'created_at')
+        fields = ('id', 'earning_type', 'coins', 'amount', 'description', 'call_id', 'call_type', 'created_at')
+
+    def get_call_type(self, obj):
+        if obj.call and hasattr(obj.call, 'call_type'):
+            return obj.call.call_type
+        return obj.earning_type
 
 
 class AgentWalletSerializer(serializers.ModelSerializer):

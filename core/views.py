@@ -11,8 +11,8 @@ from django.contrib.auth.tokens import default_token_generator  # type: ignore
 
 logger = logging.getLogger(__name__)
 # pyrefly: ignore [missing-import]
-from django.db import transaction  # type: ignore
-from django.db.models import Q  # type: ignore
+from django.db import models, transaction  # type: ignore
+from django.db.models import Q, Sum, Avg, Count  # type: ignore
 # pyrefly: ignore [missing-import]
 from rest_framework import status, permissions  # type: ignore
 # pyrefly: ignore [missing-import]
