@@ -63,6 +63,23 @@ from core.views import (
     CallerAccountDeleteView,
     CallerFavoritesView,
     CallerFavoriteDetailView,
+    AgentLoginView,
+    AgentLogoutView,
+    AgentForgotPasswordView,
+    AgentResetPasswordView,
+    AgentProfileView,
+    AgentProfessionsView,
+    AgentRateView,
+    AgentDutyView,
+    AgentDutyOnView,
+    AgentDutyOffView,
+    AgentDashboardView,
+    AgentEarningsTodayView,
+    AgentEarningsHistoryView,
+    AgentWalletView,
+    AgentPayoutView,
+    AgentRatingView,
+    AgentRecentSessionsView,
 )
 from core.caller_views import app_home_view, admin_panel_view
 
@@ -591,6 +608,125 @@ urlpatterns = [
     path('api/api/caller/account', CallerAccountDeleteView.as_view()),
     path('api/api/callerprofileview/', CallerProfileView.as_view()),
     path('api/api/callerprofileview', CallerProfileView.as_view()),
+
+    # ==========================================
+    # AGENT BACKEND API ROUTES (ALL VARIANTS)
+    # ==========================================
+    # Agent Authentication
+    path('api/auth/agent/login/', AgentLoginView.as_view(), name='api-auth-agent-login'),
+    path('api/auth/agent/login', AgentLoginView.as_view()),
+    path('auth/agent/login/', AgentLoginView.as_view()),
+    path('auth/agent/login', AgentLoginView.as_view()),
+    path('api/agent/login/', AgentLoginView.as_view()),
+    path('api/agent/login', AgentLoginView.as_view()),
+    path('agent/login/', AgentLoginView.as_view()),
+    path('agent/login', AgentLoginView.as_view()),
+    path('api/api/auth/agent/login/', AgentLoginView.as_view()),
+    path('api/api/auth/agent/login', AgentLoginView.as_view()),
+    path('api/api/agent/login/', AgentLoginView.as_view()),
+    path('api/api/agent/login', AgentLoginView.as_view()),
+
+    # Agent Logout
+    path('api/auth/agent/logout/', AgentLogoutView.as_view(), name='api-auth-agent-logout'),
+    path('api/auth/agent/logout', AgentLogoutView.as_view()),
+    path('auth/agent/logout/', AgentLogoutView.as_view()),
+    path('auth/agent/logout', AgentLogoutView.as_view()),
+    path('api/agent/logout/', AgentLogoutView.as_view()),
+    path('api/agent/logout', AgentLogoutView.as_view()),
+    path('agent/logout/', AgentLogoutView.as_view()),
+    path('agent/logout', AgentLogoutView.as_view()),
+    path('api/api/auth/agent/logout/', AgentLogoutView.as_view()),
+    path('api/api/auth/agent/logout', AgentLogoutView.as_view()),
+
+    # Agent Password Reset
+    path('api/agent/password/forgot/', AgentForgotPasswordView.as_view(), name='api-agent-password-forgot'),
+    path('api/agent/password/forgot', AgentForgotPasswordView.as_view()),
+    path('agent/password/forgot/', AgentForgotPasswordView.as_view()),
+    path('agent/password/forgot', AgentForgotPasswordView.as_view()),
+    path('api/auth/agent/password/forgot/', AgentForgotPasswordView.as_view()),
+    path('auth/agent/password/forgot/', AgentForgotPasswordView.as_view()),
+    path('api/agent/password/reset/', AgentResetPasswordView.as_view(), name='api-agent-password-reset'),
+    path('api/agent/password/reset', AgentResetPasswordView.as_view()),
+    path('agent/password/reset/', AgentResetPasswordView.as_view()),
+    path('agent/password/reset', AgentResetPasswordView.as_view()),
+    path('api/auth/agent/password/reset/', AgentResetPasswordView.as_view()),
+    path('auth/agent/password/reset/', AgentResetPasswordView.as_view()),
+
+    # Agent Profile
+    path('api/agent/profile/', AgentProfileView.as_view(), name='api-agent-profile'),
+    path('api/agent/profile', AgentProfileView.as_view()),
+    path('agent/profile/', AgentProfileView.as_view()),
+    path('agent/profile', AgentProfileView.as_view()),
+    path('api/api/agent/profile/', AgentProfileView.as_view()),
+    path('api/api/agent/profile', AgentProfileView.as_view()),
+
+    # Agent Professions / Categories
+    path('api/agent/professions/', AgentProfessionsView.as_view(), name='api-agent-professions'),
+    path('api/agent/professions', AgentProfessionsView.as_view()),
+    path('agent/professions/', AgentProfessionsView.as_view()),
+    path('agent/professions', AgentProfessionsView.as_view()),
+
+    # Agent Rate
+    path('api/agent/rate/', AgentRateView.as_view(), name='api-agent-rate'),
+    path('api/agent/rate', AgentRateView.as_view()),
+    path('agent/rate/', AgentRateView.as_view()),
+    path('agent/rate', AgentRateView.as_view()),
+
+    # Agent Duty
+    path('api/agent/duty/', AgentDutyView.as_view(), name='api-agent-duty'),
+    path('api/agent/duty', AgentDutyView.as_view()),
+    path('agent/duty/', AgentDutyView.as_view()),
+    path('agent/duty', AgentDutyView.as_view()),
+    path('api/agent/duty/on/', AgentDutyOnView.as_view(), name='api-agent-duty-on'),
+    path('api/agent/duty/on', AgentDutyOnView.as_view()),
+    path('agent/duty/on/', AgentDutyOnView.as_view()),
+    path('agent/duty/on', AgentDutyOnView.as_view()),
+    path('api/agent/duty/off/', AgentDutyOffView.as_view(), name='api-agent-duty-off'),
+    path('api/agent/duty/off', AgentDutyOffView.as_view()),
+    path('agent/duty/off/', AgentDutyOffView.as_view()),
+    path('agent/duty/off', AgentDutyOffView.as_view()),
+
+    # Agent Dashboard
+    path('api/agent/dashboard/', AgentDashboardView.as_view(), name='api-agent-dashboard'),
+    path('api/agent/dashboard', AgentDashboardView.as_view()),
+    path('agent/dashboard/', AgentDashboardView.as_view()),
+    path('agent/dashboard', AgentDashboardView.as_view()),
+    path('api/api/agent/dashboard/', AgentDashboardView.as_view()),
+    path('api/api/agent/dashboard', AgentDashboardView.as_view()),
+
+    # Agent Earnings
+    path('api/agent/earnings/today/', AgentEarningsTodayView.as_view(), name='api-agent-earnings-today'),
+    path('api/agent/earnings/today', AgentEarningsTodayView.as_view()),
+    path('agent/earnings/today/', AgentEarningsTodayView.as_view()),
+    path('agent/earnings/today', AgentEarningsTodayView.as_view()),
+    path('api/agent/earnings/', AgentEarningsHistoryView.as_view(), name='api-agent-earnings-history'),
+    path('api/agent/earnings', AgentEarningsHistoryView.as_view()),
+    path('agent/earnings/', AgentEarningsHistoryView.as_view()),
+    path('agent/earnings', AgentEarningsHistoryView.as_view()),
+
+    # Agent Wallet & Payouts
+    path('api/agent/wallet/', AgentWalletView.as_view(), name='api-agent-wallet'),
+    path('api/agent/wallet', AgentWalletView.as_view()),
+    path('agent/wallet/', AgentWalletView.as_view()),
+    path('agent/wallet', AgentWalletView.as_view()),
+    path('api/agent/payouts/', AgentPayoutView.as_view(), name='api-agent-payouts'),
+    path('api/agent/payouts', AgentPayoutView.as_view()),
+    path('agent/payouts/', AgentPayoutView.as_view()),
+    path('agent/payouts', AgentPayoutView.as_view()),
+
+    # Agent Ratings & Recent Sessions
+    path('api/agent/rating/', AgentRatingView.as_view(), name='api-agent-rating'),
+    path('api/agent/rating', AgentRatingView.as_view()),
+    path('agent/rating/', AgentRatingView.as_view()),
+    path('agent/rating', AgentRatingView.as_view()),
+    path('api/agent/reviews/', AgentRatingView.as_view(), name='api-agent-reviews'),
+    path('api/agent/reviews', AgentRatingView.as_view()),
+    path('agent/reviews/', AgentRatingView.as_view()),
+    path('agent/reviews', AgentRatingView.as_view()),
+    path('api/agent/sessions/recent/', AgentRecentSessionsView.as_view(), name='api-agent-sessions-recent'),
+    path('api/agent/sessions/recent', AgentRecentSessionsView.as_view()),
+    path('agent/sessions/recent/', AgentRecentSessionsView.as_view()),
+    path('agent/sessions/recent', AgentRecentSessionsView.as_view()),
 
     # Standard App routing
     path('api/api/', include('core.urls')),
