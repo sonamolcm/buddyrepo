@@ -209,16 +209,6 @@ class CallerProfileSerializer(serializers.ModelSerializer):
             'updated_at',
         )
 
-
-class CallerPrivacySettingsSerializer(serializers.Serializer):
-    """
-    Serializer for Caller Privacy & Security Settings:
-    - profile_visible_in_feed: bool (default True)
-    - ghost_calling_mode: bool (default False)
-    """
-    profile_visible_in_feed = serializers.BooleanField(required=False)
-    ghost_calling_mode = serializers.BooleanField(required=False)
-
     def get_profession(self, obj):
         # Note: Profession is defined on BuddyProfile, not in CallerProfile model
         return None
@@ -261,6 +251,16 @@ class CallerPrivacySettingsSerializer(serializers.Serializer):
         if user_updated:
             instance.user.save()
         return instance
+
+
+class CallerPrivacySettingsSerializer(serializers.Serializer):
+    """
+    Serializer for Caller Privacy & Security Settings:
+    - profile_visible_in_feed: bool (default True)
+    - ghost_calling_mode: bool (default False)
+    """
+    profile_visible_in_feed = serializers.BooleanField(required=False)
+    ghost_calling_mode = serializers.BooleanField(required=False)
 
 
 class WalletSerializer(serializers.ModelSerializer):
@@ -593,19 +593,56 @@ class CallHistorySerializer(serializers.ModelSerializer):
 class CallerFavoriteSerializer(serializers.ModelSerializer):
     """
     Serializer for Caller Favorites:
-    - agent_id: int
-    - name: str
-    - category: str
-    - rating: float
+    Provides rich agent metadata (ID, name, category, rating, profile picture, rate, online status).
     """
     agent_id = serializers.ReadOnlyField(source='agent.id')
+    user_id = serializers.ReadOnlyField(source='agent.id')
+    listener_id = serializers.SerializerMethodField()
     name = serializers.SerializerMethodField()
     category = serializers.SerializerMethodField()
     rating = serializers.SerializerMethodField()
+    rate_per_minute = serializers.SerializerMethodField()
+    profile_picture = serializers.SerializerMethodField()
+    avatar = serializers.SerializerMethodField()
+    is_online = serializers.SerializerMethodField()
+    is_available = serializers.SerializerMethodField()
+    gender = serializers.SerializerMethodField()
+    language = serializers.SerializerMethodField()
+    languages = serializers.SerializerMethodField()
+    bio = serializers.SerializerMethodField()
+    phone_number = serializers.SerializerMethodField()
+    created_at = serializers.DateTimeField(read_only=True, format="%Y-%m-%dT%H:%M:%SZ")
 
     class Meta:
         model = CallerFavorite
-        fields = ('agent_id', 'name', 'category', 'rating')
+        fields = (
+            'id',
+            'agent_id',
+            'user_id',
+            'listener_id',
+            'name',
+            'category',
+            'rating',
+            'rate_per_minute',
+            'profile_picture',
+            'avatar',
+            'is_online',
+            'is_available',
+            'gender',
+            'language',
+            'languages',
+            'bio',
+            'phone_number',
+            'created_at',
+        )
+
+    def get_listener_id(self, obj):
+        agent = getattr(obj, 'agent', None)
+        if not agent:
+            return ""
+        if hasattr(agent, 'listener_profile') and getattr(agent.listener_profile, 'listener_id', None):
+            return agent.listener_profile.listener_id
+        return f"LISTENER_{agent.id}"
 
     def get_name(self, obj):
         agent = getattr(obj, 'agent', None)
@@ -613,6 +650,10 @@ class CallerFavoriteSerializer(serializers.ModelSerializer):
             return ""
         if hasattr(agent, 'listener_profile') and getattr(agent.listener_profile, 'name', None):
             return agent.listener_profile.name
+        if hasattr(agent, 'buddy_profile') and getattr(agent.buddy_profile, 'user', None):
+            fn = agent.get_full_name()
+            if fn:
+                return fn
         if hasattr(agent, 'caller_profile') and getattr(agent.caller_profile, 'name', None):
             return agent.caller_profile.name
         return agent.get_full_name() or agent.username
@@ -644,6 +685,93 @@ class CallerFavoriteSerializer(serializers.ModelSerializer):
         except Exception:
             pass
         return 5.0
+
+    def get_rate_per_minute(self, obj):
+        agent = getattr(obj, 'agent', None)
+        if agent and hasattr(agent, 'buddy_profile') and agent.buddy_profile:
+            return getattr(agent.buddy_profile, 'rate_per_minute', 5)
+        return 5
+
+    def get_profile_picture(self, obj):
+        agent = getattr(obj, 'agent', None)
+        if not agent:
+            return ""
+        try:
+            request = self.context.get('request')
+            pic = None
+            if hasattr(agent, 'listener_profile') and agent.listener_profile and agent.listener_profile.profile_picture:
+                pic = agent.listener_profile.profile_picture
+            elif hasattr(agent, 'caller_profile') and agent.caller_profile and agent.caller_profile.profile_picture:
+                pic = agent.caller_profile.profile_picture
+            if pic:
+                if request:
+                    return request.build_absolute_uri(pic.url)
+                return pic.url
+        except Exception:
+            pass
+        return ""
+
+    def get_avatar(self, obj):
+        return self.get_profile_picture(obj)
+
+    def get_is_online(self, obj):
+        agent = getattr(obj, 'agent', None)
+        if not agent:
+            return False
+        if hasattr(agent, 'buddy_profile') and agent.buddy_profile:
+            return bool(agent.buddy_profile.is_online)
+        if hasattr(agent, 'listener_profile') and agent.listener_profile:
+            return bool(agent.listener_profile.is_available)
+        return True
+
+    def get_is_available(self, obj):
+        agent = getattr(obj, 'agent', None)
+        if not agent:
+            return False
+        if hasattr(agent, 'listener_profile') and agent.listener_profile:
+            return bool(agent.listener_profile.is_available)
+        if hasattr(agent, 'buddy_profile') and agent.buddy_profile:
+            return bool(not agent.buddy_profile.is_busy)
+        return True
+
+    def get_gender(self, obj):
+        agent = getattr(obj, 'agent', None)
+        if not agent:
+            return ""
+        if hasattr(agent, 'listener_profile') and agent.listener_profile and agent.listener_profile.gender:
+            return agent.listener_profile.gender
+        return getattr(agent, 'gender', '') or ""
+
+    def get_language(self, obj):
+        agent = getattr(obj, 'agent', None)
+        if not agent:
+            return "English"
+        if hasattr(agent, 'listener_profile') and agent.listener_profile and agent.listener_profile.language:
+            return agent.listener_profile.language
+        if hasattr(agent, 'buddy_profile') and agent.buddy_profile and agent.buddy_profile.languages:
+            return agent.buddy_profile.languages
+        return "English"
+
+    def get_languages(self, obj):
+        return self.get_language(obj)
+
+    def get_bio(self, obj):
+        agent = getattr(obj, 'agent', None)
+        if not agent:
+            return ""
+        if hasattr(agent, 'buddy_profile') and agent.buddy_profile and agent.buddy_profile.bio:
+            return agent.buddy_profile.bio
+        return ""
+
+    def get_phone_number(self, obj):
+        agent = getattr(obj, 'agent', None)
+        if not agent:
+            return ""
+        phone = getattr(agent, 'phone_number', '') or ""
+        if len(phone) > 6:
+            return f"{phone[:3]}****{phone[-3:]}"
+        return phone
+
 
 
 class CallRequestSerializer(serializers.Serializer):
