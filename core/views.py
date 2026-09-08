@@ -1928,9 +1928,9 @@ class EndCallView(APIView):
                 AgentEarning.objects.create(
                     agent=call.receiver,
                     call=call,
-                    amount=actual_deducted,
-                    rate_per_second=rate_per_second,
-                    duration_seconds=call.duration_seconds
+                    coins=actual_deducted,
+                    earning_type='VOICE',
+                    description=f"Call #{call.id} with {call.caller.username} ({call.duration_seconds}s @ {rate_per_second} coins/s)"
                 )
 
             # Update Agent stats on ListenerProfile
@@ -4942,7 +4942,7 @@ class AgentDashboardView(APIView):
         today_earnings_sum = AgentEarning.objects.filter(
             agent=agent,
             created_at__gte=today_start
-        ).aggregate(models.Sum('amount'))['amount__sum'] or 0
+        ).aggregate(models.Sum('coins'))['coins__sum'] or 0
 
         # Today's calls
         today_calls_count = Call.objects.filter(
@@ -5035,7 +5035,7 @@ class AgentEarningsTodayView(APIView):
             created_at__gte=today_start
         ).select_related('call', 'call__caller').order_by('-created_at')
 
-        total_coins = earnings.aggregate(models.Sum('amount'))['amount__sum'] or 0
+        total_coins = earnings.aggregate(models.Sum('coins'))['coins__sum'] or 0
         serializer = AgentEarningSerializer(earnings, many=True)
 
         return Response({
@@ -5065,7 +5065,7 @@ class AgentEarningsHistoryView(APIView):
         if end_date:
             earnings = earnings.filter(created_at__date__lte=end_date)
 
-        total_amount = earnings.aggregate(models.Sum('amount'))['amount__sum'] or 0
+        total_amount = earnings.aggregate(models.Sum('coins'))['coins__sum'] or 0
 
         page = int(request.query_params.get('page', 1))
         page_size = int(request.query_params.get('page_size', 20))
@@ -5112,7 +5112,7 @@ class AgentPayoutView(APIView):
     permission_classes = [permissions.IsAuthenticated, IsAgentUser]
 
     def get(self, request):
-        payouts = AgentPayout.objects.filter(agent=request.user).order_by('-created_at')
+        payouts = AgentPayout.objects.filter(agent=request.user).order_by('-requested_at')
         serializer = AgentPayoutSerializer(payouts, many=True)
         return Response({
             "success": True,
@@ -5128,39 +5128,39 @@ class AgentPayoutView(APIView):
                 "message": serializer.errors
             }, status=status.HTTP_400_BAD_REQUEST)
 
-        amount = serializer.validated_data['amount']
-        payout_method = serializer.validated_data['payout_method']
-        details = serializer.validated_data.get('details', {})
+        coins = serializer.validated_data.get('coins') or 0
+        payout_method = serializer.validated_data.get('payout_method', 'UPI')
+        details = serializer.validated_data.get('payout_details', {})
 
-        if amount <= 0:
+        if coins <= 0:
             return Response({
                 "success": False,
-                "message": "Payout amount must be greater than zero."
+                "message": "Payout coins must be greater than zero."
             }, status=status.HTTP_400_BAD_REQUEST)
 
         with transaction.atomic():
             wallet, _ = AgentWallet.objects.select_for_update().get_or_create(agent=request.user)
-            if wallet.balance < amount:
+            if wallet.balance < coins:
                 return Response({
                     "success": False,
                     "message": f"Insufficient wallet balance. Current balance: {wallet.balance} coins."
                 }, status=status.HTTP_400_BAD_REQUEST)
 
-            wallet.balance -= amount
-            wallet.total_withdrawn += amount
-            wallet.save(update_fields=['balance', 'total_withdrawn', 'updated_at'])
+            wallet.balance -= coins
+            wallet.total_paid_out += coins
+            wallet.save(update_fields=['balance', 'total_paid_out', 'updated_at'])
 
             payout = AgentPayout.objects.create(
                 agent=request.user,
-                amount=amount,
+                coins=coins,
                 payout_method=payout_method,
-                details=details,
-                status='REQUESTED'
+                payout_details=details,
+                status='PENDING'
             )
 
         return Response({
             "success": True,
-            "message": f"Payout request for {amount} coins submitted successfully.",
+            "message": f"Payout request for {coins} coins submitted successfully.",
             "payout": AgentPayoutSerializer(payout).data,
             "remaining_balance": wallet.balance
         }, status=status.HTTP_201_CREATED)

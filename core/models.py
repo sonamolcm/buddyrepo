@@ -431,6 +431,14 @@ class AgentWallet(models.Model):
     def __str__(self):
         return f"AgentWallet ({self.agent.username}): {self.balance} coins"
 
+    @property
+    def total_withdrawn(self):
+        return self.total_paid_out
+
+    @total_withdrawn.setter
+    def total_withdrawn(self, value):
+        self.total_paid_out = value
+
 
 class AgentEarning(models.Model):
     EARNING_TYPES = (
@@ -442,8 +450,8 @@ class AgentEarning(models.Model):
     agent = models.ForeignKey(User, on_delete=models.CASCADE, related_name='earnings')
     call = models.ForeignKey('Call', null=True, blank=True, on_delete=models.SET_NULL, related_name='agent_earnings')
     earning_type = models.CharField(max_length=20, choices=EARNING_TYPES, default='VOICE')
-    coins = models.PositiveIntegerField()
-    description = models.CharField(max_length=255)
+    coins = models.PositiveIntegerField(default=0)
+    description = models.CharField(max_length=255, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -451,6 +459,14 @@ class AgentEarning(models.Model):
 
     def __str__(self):
         return f"{self.agent.username} +{self.coins} coins ({self.earning_type})"
+
+    @property
+    def amount(self):
+        return self.coins
+
+    @amount.setter
+    def amount(self, value):
+        self.coins = value
 
 
 class AgentPayout(models.Model):
@@ -475,5 +491,17 @@ class AgentPayout(models.Model):
 
     def __str__(self):
         return f"Payout #{self.id} for {self.agent.username}: {self.coins} coins ({self.status})"
+
+    @property
+    def amount(self):
+        return self.coins
+
+    @amount.setter
+    def amount(self, value):
+        self.coins = value
+
+    @property
+    def created_at(self):
+        return self.requested_at
 
 

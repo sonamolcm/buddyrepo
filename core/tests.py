@@ -238,8 +238,8 @@ class AgentCallLifecycleAndBillingTests(TestCase):
         # Verify AgentEarning record created
         earning = AgentEarning.objects.filter(call=call, agent=self.agent).first()
         self.assertIsNotNone(earning)
+        self.assertEqual(earning.coins, expected_deducted)
         self.assertEqual(earning.amount, expected_deducted)
-        self.assertEqual(earning.rate_per_second, 3)
 
         # Verify Agent stats updated
         self.profile.refresh_from_db()
@@ -280,19 +280,19 @@ class AgentDashboardAndPayoutTests(TestCase):
 
     def test_agent_payout_request_success(self):
         payout_res = self.client.post('/api/agent/payouts/', {
-            'amount': 50,
+            'coins': 50,
             'payout_method': 'UPI',
             'details': {'upi_id': 'agent@okhdfcbank'}
         })
         self.assertEqual(payout_res.status_code, status.HTTP_201_CREATED)
         self.wallet.refresh_from_db()
         self.assertEqual(self.wallet.balance, 100)
-        self.assertEqual(self.wallet.total_withdrawn, 50)
+        self.assertEqual(self.wallet.total_paid_out, 50)
         self.assertEqual(AgentPayout.objects.filter(agent=self.agent).count(), 1)
 
     def test_agent_payout_request_insufficient_balance(self):
         bad_res = self.client.post('/api/agent/payouts/', {
-            'amount': 500,
+            'coins': 500,
             'payout_method': 'UPI',
             'details': {'upi_id': 'agent@okhdfcbank'}
         })

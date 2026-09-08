@@ -1056,11 +1056,14 @@ class AgentWalletSerializer(serializers.ModelSerializer):
 
 
 class AgentPayoutSerializer(serializers.ModelSerializer):
+    amount = serializers.IntegerField(write_only=True, required=False)
+
     class Meta:
         model = AgentPayout
         fields = (
             'id',
             'coins',
+            'amount',
             'amount_inr',
             'payout_method',
             'payout_details',
@@ -1070,6 +1073,15 @@ class AgentPayoutSerializer(serializers.ModelSerializer):
             'notes',
         )
         read_only_fields = ('status', 'requested_at', 'processed_at', 'amount_inr')
+
+    def to_internal_value(self, data):
+        if hasattr(data, 'copy'):
+            data = data.copy()
+        else:
+            data = dict(data)
+        if 'amount' in data and 'coins' not in data:
+            data['coins'] = data['amount']
+        return super().to_internal_value(data)
 
     def validate_coins(self, value):
         if value <= 0:

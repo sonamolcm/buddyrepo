@@ -234,20 +234,20 @@ class AgentDutySessionAdmin(admin.ModelAdmin):
 
 @admin.register(AgentWallet)
 class AgentWalletAdmin(admin.ModelAdmin):
-    list_display = ('agent', 'balance', 'total_earned', 'total_withdrawn', 'updated_at')
+    list_display = ('agent', 'balance', 'total_earned', 'total_paid_out', 'updated_at')
     search_fields = ('agent__username', 'agent__phone_number')
     list_filter = ('updated_at',)
 
 
 @admin.register(AgentEarning)
 class AgentEarningAdmin(admin.ModelAdmin):
-    list_display = ('id', 'agent', 'call', 'amount', 'rate_per_second', 'duration_seconds', 'created_at')
-    list_filter = ('rate_per_second', 'created_at')
-    search_fields = ('agent__username', 'call__id')
+    list_display = ('id', 'agent', 'call', 'coins', 'earning_type', 'description', 'created_at')
+    list_filter = ('earning_type', 'created_at')
+    search_fields = ('agent__username', 'call__id', 'description')
 
 
 @admin.register(AgentPayout)
 class AgentPayoutAdmin(admin.ModelAdmin):
-    list_display = ('id', 'agent', 'amount', 'payout_method', 'status', 'created_at')
-    list_filter = ('status', 'payout_method', 'created_at')
+    list_display = ('id', 'agent', 'coins', 'amount_inr', 'payout_method', 'status', 'requested_at')
+    list_filter = ('status', 'payout_method', 'requested_at')
     search_fields = ('agent__username', 'payout_method')
