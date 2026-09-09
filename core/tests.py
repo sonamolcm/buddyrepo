@@ -422,6 +422,7 @@ class CategoryFilterAndSearchAPITests(TestCase):
         self.assertEqual(doc_item['name'], "Doctor")
         self.assertEqual(doc_item['count'], 2)
         self.assertEqual(doc_item['matches_count'], 2)
+        self.assertEqual(len(doc_item['matches']), 2)
 
         # 2. Choose Doctor category -> shows count & matches list
         cat_detail_res = self.client.get(f'/api/categories/{doctor_cat.id}/')

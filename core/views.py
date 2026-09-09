@@ -2851,78 +2851,6 @@ class InterestListView(APIView):
 # ===================================================
 # 6.1 CATEGORIES API (FOR CALLER PROFESSIONS)
 # ===================================================
-class CategoryListCreateView(APIView):
-    """
-    GET /api/categories/
-    - Return only categories where is_active=True.
-    - Public endpoint (accessible to callers, listeners, guests, and admins).
-    - Automatically seeds default categories if empty.
-
-    POST /api/categories/
-    - Admin only.
-    - Set is_active=True automatically for newly created category.
-    - Handle duplicate names properly and return HTTP 400.
-    """
-    def get_permissions(self):
-        if self.request.method == 'GET':
-            return [permissions.AllowAny()]
-        return [IsAdminUser()]
-
-    def get(self, request):
-        categories = Category.objects.filter(is_active=True)
-        if not categories.exists():
-            from .management.commands.seed_categories import INITIAL_CATEGORIES
-            for item in INITIAL_CATEGORIES:
-                Category.objects.get_or_create(
-                    name=item["name"],
-                    defaults={
-                        "description": item.get("description", ""),
-                        "is_active": True,
-                    }
-                )
-            categories = Category.objects.filter(is_active=True)
-
-        # Support search bar filtering (first letter, second letter, or prefix)
-        query = (
-            request.query_params.get('search') or
-            request.query_params.get('q') or
-            request.query_params.get('query') or
-            request.query_params.get('starts_with') or
-            request.query_params.get('startswith') or
-            request.query_params.get('prefix') or
-            request.query_params.get('letter') or
-            request.query_params.get('letters') or
-            request.query_params.get('first_letter') or
-            request.query_params.get('name') or
-            ''
-        ).strip()
-
-        if query:
-            categories = categories.filter(name__istartswith=query).order_by('name')
-        else:
-            categories = categories.order_by('id')
-
-        serializer = CategorySerializer(categories, many=True)
-        return Response({
-            "status": True,
-            "status_code": status.HTTP_200_OK,
-            "success": True,
-            "message": "Categories retrieved successfully.",
-            "count": len(serializer.data),
-            "data": serializer.data,
-            "categories": serializer.data,
-            "results": serializer.data,
-        }, status=status.HTTP_200_OK)
-
-    def post(self, request):
-        serializer = CategorySerializer(data=request.data)
-        if not serializer.is_valid():
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-        category = serializer.save(is_active=True)
-        return Response(CategorySerializer(category).data, status=status.HTTP_201_CREATED)
-
-
 def serialize_listener_user(user, request=None):
     lp = getattr(user, 'listener_profile', None)
     bp = getattr(user, 'buddy_profile', None)
@@ -2983,6 +2911,200 @@ def serialize_listener_user(user, request=None):
     }
 
 
+def ensure_sample_doctors(doctor_category=None):
+    if not doctor_category:
+        doctor_category = Category.objects.filter(name__iexact="Doctor", is_active=True).first()
+    if not doctor_category:
+        return []
+
+    users = User.objects.filter(
+        Q(listener_profile__profession=doctor_category) | Q(buddy_profile__profession=doctor_category),
+        is_active=True
+    ).select_related('listener_profile', 'buddy_profile').distinct()
+
+    if not users.exists():
+        sample_docs = [
+            {
+                "username": "dr_sarah_jenkins",
+                "name": "Dr. Sarah Jenkins",
+                "gender": "Female",
+                "language": "English",
+                "bio": "Experienced General Physician offering consultation on general health, preventive care, and wellness.",
+                "interests": ["Medical Advice", "Health & Wellness", "Friendly Chat"],
+                "rate_per_minute": 180,
+                "rating": 4.9
+            },
+            {
+                "username": "dr_arun_kumar",
+                "name": "Dr. Arun Kumar",
+                "gender": "Male",
+                "language": "English, Malayalam, Hindi",
+                "bio": "Consultant Physician specializing in lifestyle medicine, second opinions, and routine health counseling.",
+                "interests": ["Clinical Consultation", "Stress & Anxiety", "Health Guidance"],
+                "rate_per_minute": 180,
+                "rating": 4.8
+            }
+        ]
+        for doc in sample_docs:
+            u, _ = User.objects.get_or_create(
+                username=doc["username"],
+                defaults={
+                    "first_name": doc["name"],
+                    "role": "LISTENER",
+                    "is_active": True,
+                    "is_verified": True
+                }
+            )
+            if not u.has_usable_password():
+                u.set_password("DoctorPass123!")
+                u.save()
+            lp, _ = ListenerProfile.objects.get_or_create(
+                user=u,
+                defaults={
+                    "listener_id": doc["username"],
+                    "name": doc["name"],
+                    "profession": doctor_category,
+                    "gender": doc["gender"],
+                    "language": doc["language"],
+                    "bio": doc["bio"],
+                    "interests": doc["interests"],
+                    "rate_per_minute": doc["rate_per_minute"],
+                    "rate_per_second": doc["rate_per_minute"] // 60,
+                    "rating": doc["rating"],
+                    "is_available": True,
+                    "is_verified": True
+                }
+            )
+            if not lp.profession:
+                lp.profession = doctor_category
+                lp.name = doc["name"]
+                lp.save(update_fields=['profession', 'name'])
+
+        users = User.objects.filter(
+            Q(listener_profile__profession=doctor_category) | Q(buddy_profile__profession=doctor_category),
+            is_active=True
+        ).select_related('listener_profile', 'buddy_profile').distinct()
+
+    return users
+
+
+class CategoryListCreateView(APIView):
+    """
+    GET /api/categories/
+    - Return only categories where is_active=True.
+    - Public endpoint (accessible to callers, listeners, guests, and admins).
+    - Automatically seeds default categories if empty.
+
+    POST /api/categories/
+    - Admin only.
+    - Set is_active=True automatically for newly created category.
+    - Handle duplicate names properly and return HTTP 400.
+    """
+    def get_permissions(self):
+        if self.request.method == 'GET':
+            return [permissions.AllowAny()]
+        return [IsAdminUser()]
+
+    def get(self, request):
+        categories = Category.objects.filter(is_active=True)
+        if not categories.exists():
+            from .management.commands.seed_categories import INITIAL_CATEGORIES
+            for item in INITIAL_CATEGORIES:
+                Category.objects.get_or_create(
+                    name=item["name"],
+                    defaults={
+                        "description": item.get("description", ""),
+                        "is_active": True,
+                    }
+                )
+            categories = Category.objects.filter(is_active=True)
+
+        # Support search bar filtering (first letter, second letter, or prefix)
+        query = (
+            request.query_params.get('search') or
+            request.query_params.get('q') or
+            request.query_params.get('query') or
+            request.query_params.get('starts_with') or
+            request.query_params.get('startswith') or
+            request.query_params.get('prefix') or
+            request.query_params.get('letter') or
+            request.query_params.get('letters') or
+            request.query_params.get('first_letter') or
+            request.query_params.get('name') or
+            ''
+        ).strip()
+
+        if query:
+            categories = categories.filter(name__istartswith=query).order_by('name')
+        else:
+            categories = categories.order_by('id')
+
+        # Ensure sample doctors exist if Doctor category is in results
+        doc_cat = next((c for c in categories if c.name.lower() in ('doctor', 'doctors')), None)
+        if doc_cat:
+            ensure_sample_doctors(doc_cat)
+
+        # Prefetch users for all active categories in this queryset
+        users_qs = User.objects.filter(
+            Q(listener_profile__profession__in=categories) | Q(buddy_profile__profession__in=categories),
+            is_active=True
+        ).select_related('listener_profile', 'buddy_profile').distinct()
+
+        from collections import defaultdict
+        matches_by_cat_id = defaultdict(list)
+        for u in users_qs:
+            serialized_user = serialize_listener_user(u, request)
+            lp = getattr(u, 'listener_profile', None)
+            bp = getattr(u, 'buddy_profile', None)
+            prof_id = (lp.profession_id if lp and lp.profession_id else (bp.profession_id if bp else None))
+            if prof_id:
+                matches_by_cat_id[prof_id].append(serialized_user)
+
+        category_data_list = []
+        for cat in categories:
+            cat_matches = matches_by_cat_id.get(cat.id, [])
+            cat_desc_list = normalize_description_to_list(cat.description, cat.name)
+            cat_msg = (
+                f"Category '{cat.name}' details and doctors retrieved successfully."
+                if cat.name.lower() in ('doctor', 'doctors')
+                else f"Category '{cat.name}' details and {cat.name.lower()}s retrieved successfully."
+            )
+            cat_item = {
+                "id": cat.id,
+                "name": cat.name,
+                "description": cat_desc_list,
+                "is_active": cat.is_active,
+                "count": len(cat_matches),
+                "matches_count": len(cat_matches),
+                "description_text": str(cat.description or ''),
+                "status": True,
+                "status_code": status.HTTP_200_OK,
+                "success": True,
+                "message": cat_msg,
+                "matches": cat_matches,
+            }
+            category_data_list.append(cat_item)
+
+        return Response({
+            "status": True,
+            "status_code": status.HTTP_200_OK,
+            "success": True,
+            "message": "Categories retrieved successfully.",
+            "count": len(category_data_list),
+            "data": category_data_list,
+            "categories": category_data_list,
+            "results": category_data_list,
+        }, status=status.HTTP_200_OK)
+
+    def post(self, request):
+        serializer = CategorySerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        category = serializer.save(is_active=True)
+        return Response(CategorySerializer(category).data, status=status.HTTP_201_CREATED)
+
+
 class CategoryDetailView(APIView):
     """
     GET /api/categories/<id_or_name>/
@@ -3035,70 +3157,9 @@ class CategoryDetailView(APIView):
                 status=status.HTTP_404_NOT_FOUND
             )
 
-        users = User.objects.filter(
-            Q(listener_profile__profession=category) | Q(buddy_profile__profession=category),
-            is_active=True
-        ).select_related('listener_profile', 'buddy_profile').distinct()
-
-        # If no doctors yet assigned to Doctor category, ensure sample doctors exist
-        if not users.exists() and category.name.lower() in ('doctor', 'doctors'):
-            sample_docs = [
-                {
-                    "username": "dr_sarah_jenkins",
-                    "name": "Dr. Sarah Jenkins",
-                    "gender": "Female",
-                    "language": "English",
-                    "bio": "Experienced General Physician offering consultation on general health, preventive care, and wellness.",
-                    "interests": ["Medical Advice", "Health & Wellness", "Friendly Chat"],
-                    "rate_per_minute": 180,
-                    "rating": 4.9
-                },
-                {
-                    "username": "dr_arun_kumar",
-                    "name": "Dr. Arun Kumar",
-                    "gender": "Male",
-                    "language": "English, Malayalam, Hindi",
-                    "bio": "Consultant Physician specializing in lifestyle medicine, second opinions, and routine health counseling.",
-                    "interests": ["Clinical Consultation", "Stress & Anxiety", "Health Guidance"],
-                    "rate_per_minute": 180,
-                    "rating": 4.8
-                }
-            ]
-            for doc in sample_docs:
-                u, _ = User.objects.get_or_create(
-                    username=doc["username"],
-                    defaults={
-                        "first_name": doc["name"],
-                        "role": "LISTENER",
-                        "is_active": True,
-                        "is_verified": True
-                    }
-                )
-                if not u.has_usable_password():
-                    u.set_password("DoctorPass123!")
-                    u.save()
-                lp, _ = ListenerProfile.objects.get_or_create(
-                    user=u,
-                    defaults={
-                        "listener_id": doc["username"],
-                        "name": doc["name"],
-                        "profession": category,
-                        "gender": doc["gender"],
-                        "language": doc["language"],
-                        "bio": doc["bio"],
-                        "interests": doc["interests"],
-                        "rate_per_minute": doc["rate_per_minute"],
-                        "rate_per_second": doc["rate_per_minute"] // 60,
-                        "rating": doc["rating"],
-                        "is_available": True,
-                        "is_verified": True
-                    }
-                )
-                if not lp.profession:
-                    lp.profession = category
-                    lp.name = doc["name"]
-                    lp.save(update_fields=['profession', 'name'])
-
+        if category.name.lower() in ('doctor', 'doctors'):
+            users = ensure_sample_doctors(category)
+        else:
             users = User.objects.filter(
                 Q(listener_profile__profession=category) | Q(buddy_profile__profession=category),
                 is_active=True

@@ -452,6 +452,8 @@ class CategorySerializer(serializers.ModelSerializer):
         desc = instance.description
         data['description'] = normalize_description_to_list(desc, instance.name)
         data['description_text'] = str(desc or '')
+        if 'matches' not in data:
+            data['matches'] = []
         return data
 
     def to_internal_value(self, data):
