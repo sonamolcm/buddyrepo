@@ -315,7 +315,10 @@ class CategoryFilterAndSearchAPITests(TestCase):
     def test_list_all_active_categories_without_filter(self):
         res = self.client.get('/api/categories/')
         self.assertEqual(res.status_code, status.HTTP_200_OK)
-        names = [item['name'] for item in res.data]
+        self.assertTrue(res.data.get('status', False))
+        self.assertEqual(res.data.get('message'), "Categories retrieved successfully.")
+        items = res.data.get('data', res.data if isinstance(res.data, list) else [])
+        names = [item['name'] for item in items]
         self.assertIn("Teacher", names)
         self.assertIn("Technician", names)
         self.assertIn("Doctor", names)
@@ -327,46 +330,58 @@ class CategoryFilterAndSearchAPITests(TestCase):
         # Filtering by first letter 't' (case-insensitive)
         res = self.client.get('/api/categories/?search=t')
         self.assertEqual(res.status_code, status.HTTP_200_OK)
-        names = [item['name'] for item in res.data]
+        self.assertTrue(res.data.get('status', False))
+        items = res.data.get('data', res.data if isinstance(res.data, list) else [])
+        names = [item['name'] for item in items]
         self.assertEqual(names, ["Teacher", "Technician"])
 
     def test_filter_by_second_letter_prefix(self):
         # Filtering by first two letters 'te'
         res = self.client.get('/api/categories/?search=te')
         self.assertEqual(res.status_code, status.HTTP_200_OK)
-        names = [item['name'] for item in res.data]
+        self.assertTrue(res.data.get('status', False))
+        items = res.data.get('data', res.data if isinstance(res.data, list) else [])
+        names = [item['name'] for item in items]
         self.assertEqual(names, ["Teacher", "Technician"])
 
     def test_filter_case_insensitive_uppercase(self):
         res = self.client.get('/api/categories/?search=DO')
         self.assertEqual(res.status_code, status.HTTP_200_OK)
-        names = [item['name'] for item in res.data]
+        self.assertTrue(res.data.get('status', False))
+        items = res.data.get('data', res.data if isinstance(res.data, list) else [])
+        names = [item['name'] for item in items]
         self.assertEqual(names, ["Doctor"])
 
     def test_filter_first_letter_d(self):
         res = self.client.get('/api/categories/?search=d')
         self.assertEqual(res.status_code, status.HTTP_200_OK)
-        names = [item['name'] for item in res.data]
+        self.assertTrue(res.data.get('status', False))
+        items = res.data.get('data', res.data if isinstance(res.data, list) else [])
+        names = [item['name'] for item in items]
         self.assertEqual(names, ["Doctor"])
 
     def test_filter_first_two_letters_st_vs_so(self):
         res_st = self.client.get('/api/categories/?q=st')
         self.assertEqual(res_st.status_code, status.HTTP_200_OK)
-        self.assertEqual([item['name'] for item in res_st.data], ["Student"])
+        items_st = res_st.data.get('data', res_st.data if isinstance(res_st.data, list) else [])
+        self.assertEqual([item['name'] for item in items_st], ["Student"])
 
         res_so = self.client.get('/api/categories/?starts_with=so')
         self.assertEqual(res_so.status_code, status.HTTP_200_OK)
-        self.assertEqual([item['name'] for item in res_so.data], ["Software Developer"])
+        items_so = res_so.data.get('data', res_so.data if isinstance(res_so.data, list) else [])
+        self.assertEqual([item['name'] for item in items_so], ["Software Developer"])
 
     def test_filter_no_match(self):
         res = self.client.get('/api/categories/?search=xyz')
         self.assertEqual(res.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(res.data), 0)
+        items = res.data.get('data', res.data if isinstance(res.data, list) else [])
+        self.assertEqual(len(items), 0)
 
     def test_search_path_endpoint(self):
         res = self.client.get('/api/categories/search/?search=t')
         self.assertEqual(res.status_code, status.HTTP_200_OK)
-        names = [item['name'] for item in res.data]
+        items = res.data.get('data', res.data if isinstance(res.data, list) else [])
+        names = [item['name'] for item in items]
         self.assertEqual(names, ["Teacher", "Technician"])
 
     def test_category_shows_matches_count_and_details_when_selected(self):
@@ -400,8 +415,10 @@ class CategoryFilterAndSearchAPITests(TestCase):
         # 1. Search category on search bar -> shows match count
         search_res = self.client.get('/api/categories/?search=doc')
         self.assertEqual(search_res.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(search_res.data), 1)
-        doc_item = search_res.data[0]
+        self.assertTrue(search_res.data.get('status', False))
+        items = search_res.data.get('data', search_res.data if isinstance(search_res.data, list) else [])
+        self.assertEqual(len(items), 1)
+        doc_item = items[0]
         self.assertEqual(doc_item['name'], "Doctor")
         self.assertEqual(doc_item['count'], 2)
         self.assertEqual(doc_item['matches_count'], 2)

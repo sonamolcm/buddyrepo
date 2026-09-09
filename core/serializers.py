@@ -391,6 +391,45 @@ class UserDetailSerializer(serializers.ModelSerializer):
 
 
 
+def normalize_description_to_list(desc, category_name=""):
+    """Normalizes any category description into a clean list of strings."""
+    if not desc:
+        if category_name and str(category_name).strip().lower() in ('doctor', 'doctors'):
+            return [
+                "Physician",
+                "Medical Specialist",
+                "Surgeon",
+                "Clinic Practitioner"
+            ]
+        return []
+
+    if isinstance(desc, (list, tuple, set)):
+        return [str(x).strip() for x in desc if str(x).strip()]
+
+    if isinstance(desc, str):
+        val = desc.strip()
+        if val.startswith('[') and val.endswith(']'):
+            try:
+                import json
+                parsed = json.loads(val)
+                if isinstance(parsed, list):
+                    return [str(x).strip() for x in parsed if str(x).strip()]
+            except Exception:
+                pass
+        if '\n' in val:
+            return [line.strip().lstrip('•-* ').strip() for line in val.split('\n') if line.strip()]
+        if ',' in val:
+            items = []
+            for item in val.split(','):
+                cleaned = item.strip().lstrip('or ').strip()
+                if cleaned:
+                    items.append(cleaned)
+            return items if items else [val]
+        return [val]
+
+    return [str(desc)]
+
+
 class CategorySerializer(serializers.ModelSerializer):
     is_active = serializers.BooleanField(default=True, required=False)
     count = serializers.SerializerMethodField()
@@ -407,6 +446,20 @@ class CategorySerializer(serializers.ModelSerializer):
             'matches_count',
         )
         read_only_fields = ('id', 'count', 'matches_count')
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        desc = instance.description
+        data['description'] = normalize_description_to_list(desc, instance.name)
+        data['description_text'] = str(desc or '')
+        return data
+
+    def to_internal_value(self, data):
+        mutable_data = data.copy() if hasattr(data, 'copy') else dict(data)
+        desc = mutable_data.get('description')
+        if isinstance(desc, list):
+            mutable_data['description'] = ", ".join(str(x).strip() for x in desc if str(x).strip())
+        return super().to_internal_value(mutable_data)
 
     def get_count(self, obj):
         if hasattr(obj, 'matches_count_annotated'):

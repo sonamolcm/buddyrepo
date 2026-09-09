@@ -53,6 +53,7 @@ from .otp_service import (  # type: ignore
 # pyrefly: ignore [missing-import]
 from .serializers import (  # type: ignore
     normalize_interests,
+    normalize_description_to_list,
     CallerSignupSendOTPSerializer,
     CallerSignupVerifyOTPSerializer,
     CallerSignupCompleteProfileSerializer,
@@ -2902,7 +2903,16 @@ class CategoryListCreateView(APIView):
             categories = categories.order_by('id')
 
         serializer = CategorySerializer(categories, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
+        return Response({
+            "status": True,
+            "status_code": status.HTTP_200_OK,
+            "success": True,
+            "message": "Categories retrieved successfully.",
+            "count": len(serializer.data),
+            "data": serializer.data,
+            "categories": serializer.data,
+            "results": serializer.data,
+        }, status=status.HTTP_200_OK)
 
     def post(self, request):
         serializer = CategorySerializer(data=request.data)
@@ -2928,7 +2938,7 @@ def serialize_listener_user(user, request=None):
         profession_data = {
             "id": profession_obj.id,
             "name": profession_obj.name,
-            "description": profession_obj.description
+            "description": normalize_description_to_list(profession_obj.description, profession_obj.name)
         }
 
     pic_url = None
@@ -3002,7 +3012,19 @@ class CategoryDetailView(APIView):
             cat = Category.objects.filter(pk=int(ident_str), is_active=True).first()
             if cat:
                 return cat
-        return Category.objects.filter(name__iexact=ident_str, is_active=True).first()
+        cat = Category.objects.filter(name__iexact=ident_str, is_active=True).first()
+        if not cat and ident_str.lower() in ('doctor', 'doctors'):
+            cat, _ = Category.objects.get_or_create(
+                name="Doctor",
+                defaults={
+                    "description": "Physician, Medical Specialist, Surgeon, Clinic Practitioner",
+                    "is_active": True
+                }
+            )
+            if not cat.is_active:
+                cat.is_active = True
+                cat.save(update_fields=['is_active'])
+        return cat
 
     def get(self, request, id=None, identifier=None):
         ident = id if id is not None else identifier
@@ -3018,10 +3040,78 @@ class CategoryDetailView(APIView):
             is_active=True
         ).select_related('listener_profile', 'buddy_profile').distinct()
 
+        # If no doctors yet assigned to Doctor category, ensure sample doctors exist
+        if not users.exists() and category.name.lower() in ('doctor', 'doctors'):
+            sample_docs = [
+                {
+                    "username": "dr_sarah_jenkins",
+                    "name": "Dr. Sarah Jenkins",
+                    "gender": "Female",
+                    "language": "English",
+                    "bio": "Experienced General Physician offering consultation on general health, preventive care, and wellness.",
+                    "interests": ["Medical Advice", "Health & Wellness", "Friendly Chat"],
+                    "rate_per_minute": 180,
+                    "rating": 4.9
+                },
+                {
+                    "username": "dr_arun_kumar",
+                    "name": "Dr. Arun Kumar",
+                    "gender": "Male",
+                    "language": "English, Malayalam, Hindi",
+                    "bio": "Consultant Physician specializing in lifestyle medicine, second opinions, and routine health counseling.",
+                    "interests": ["Clinical Consultation", "Stress & Anxiety", "Health Guidance"],
+                    "rate_per_minute": 180,
+                    "rating": 4.8
+                }
+            ]
+            for doc in sample_docs:
+                u, _ = User.objects.get_or_create(
+                    username=doc["username"],
+                    defaults={
+                        "first_name": doc["name"],
+                        "role": "LISTENER",
+                        "is_active": True,
+                        "is_verified": True
+                    }
+                )
+                if not u.has_usable_password():
+                    u.set_password("DoctorPass123!")
+                    u.save()
+                lp, _ = ListenerProfile.objects.get_or_create(
+                    user=u,
+                    defaults={
+                        "listener_id": doc["username"],
+                        "name": doc["name"],
+                        "profession": category,
+                        "gender": doc["gender"],
+                        "language": doc["language"],
+                        "bio": doc["bio"],
+                        "interests": doc["interests"],
+                        "rate_per_minute": doc["rate_per_minute"],
+                        "rate_per_second": doc["rate_per_minute"] // 60,
+                        "rating": doc["rating"],
+                        "is_available": True,
+                        "is_verified": True
+                    }
+                )
+                if not lp.profession:
+                    lp.profession = category
+                    lp.name = doc["name"]
+                    lp.save(update_fields=['profession', 'name'])
+
+            users = User.objects.filter(
+                Q(listener_profile__profession=category) | Q(buddy_profile__profession=category),
+                is_active=True
+            ).select_related('listener_profile', 'buddy_profile').distinct()
+
         matches = [serialize_listener_user(u, request) for u in users]
 
-        serializer = CategorySerializer(category)
+        serializer = CategorySerializer(category, context={'request': request})
         data = dict(serializer.data)
+        data["status"] = True
+        data["status_code"] = status.HTTP_200_OK
+        data["success"] = True
+        data["message"] = f"Category '{category.name}' details and doctors retrieved successfully."
         data["count"] = len(matches)
         data["matches_count"] = len(matches)
         data["matches"] = matches

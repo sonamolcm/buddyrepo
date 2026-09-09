@@ -330,7 +330,21 @@
               "host": ["{{baseUrl}}"],
               "path": ["api", "categories", ""]
             },
-            "description": "Returns active categories and professions."
+            "description": "Returns active categories with status, message, count, and data list."
+          },
+          "response": []
+        },
+        {
+          "name": "Get Category by Name (Doctor)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/categories/Doctor/",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "categories", "Doctor", ""]
+            },
+            "description": "Returns category details for Doctor including description as list of strings, match count, and list of doctors."
           },
           "response": []
         },
