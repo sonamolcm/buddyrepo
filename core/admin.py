@@ -29,8 +29,71 @@ admin.site.site_title = "Buddy Admin"
 admin.site.index_title = "Platform & User Management Dashboard"
 
 
+# pyrefly: ignore [missing-import]
+from django import forms
+
+ADMIN_LANGUAGE_CHOICES = (
+    ('', '-- Select Language --'),
+    ('English', 'English'),
+    ('Hindi', 'Hindi (हिन्दी)'),
+    ('Malayalam', 'Malayalam (മലയാളം)'),
+    ('Tamil', 'Tamil (தமிழ்)'),
+    ('Telugu', 'Telugu (తెలుగు)'),
+    ('Kannada', 'Kannada (ಕನ್ನಡ)'),
+    ('Bengali', 'Bengali (বাংলা)'),
+    ('Marathi', 'Marathi (मराठी)'),
+    ('Gujarati', 'Gujarati (ગુજરાતી)'),
+    ('Punjabi', 'Punjabi (ਪੰਜਾਬੀ)'),
+    ('Urdu', 'Urdu (اردو)'),
+    ('Arabic', 'Arabic (العربية)'),
+    ('Spanish', 'Spanish (Español)'),
+    ('French', 'French (Français)'),
+    ('German', 'German (Deutsch)'),
+    ('Russian', 'Russian (Русский)'),
+    ('Mandarin Chinese', 'Mandarin Chinese (中文)'),
+    ('Japanese', 'Japanese (日本語)'),
+    ('Korean', 'Korean (한국어)'),
+    ('Portuguese', 'Portuguese (Português)'),
+    ('English, Hindi', 'English, Hindi'),
+    ('Malayalam, English', 'Malayalam, English'),
+    ('Tamil, English', 'Tamil, English'),
+    ('Telugu, English', 'Telugu, English'),
+    ('Kannada, English', 'Kannada, English'),
+    ('Bengali, English', 'Bengali, English'),
+    ('Marathi, Hindi', 'Marathi, Hindi'),
+    ('Multilingual', 'Multilingual (All Languages)'),
+)
+
+
+class ListenerProfileAdminForm(forms.ModelForm):
+    language = forms.CharField(
+        widget=forms.Select(choices=ADMIN_LANGUAGE_CHOICES),
+        required=False,
+        initial='English',
+        help_text="Primary spoken language(s) for calls"
+    )
+
+    class Meta:
+        model = ListenerProfile
+        fields = '__all__'
+
+
+class CallerProfileAdminForm(forms.ModelForm):
+    language = forms.CharField(
+        widget=forms.Select(choices=ADMIN_LANGUAGE_CHOICES),
+        required=False,
+        initial='English',
+        help_text="Preferred communication language"
+    )
+
+    class Meta:
+        model = CallerProfile
+        fields = '__all__'
+
+
 class ListenerProfileInline(admin.StackedInline):
     model = ListenerProfile
+    form = ListenerProfileAdminForm
     can_delete = True
     verbose_name_plural = 'Listener Profile Details'
     fk_name = 'user'
@@ -40,10 +103,12 @@ class ListenerProfileInline(admin.StackedInline):
 
 class CallerProfileInline(admin.StackedInline):
     model = CallerProfile
+    form = CallerProfileAdminForm
     can_delete = True
     verbose_name_plural = 'Caller Profile Details'
     fk_name = 'user'
     extra = 0
+
 
 
 @admin.register(User)
@@ -118,6 +183,7 @@ class UserAdmin(BaseUserAdmin):
 
 @admin.register(CallerProfile)
 class CallerProfileAdmin(admin.ModelAdmin):
+    form = CallerProfileAdminForm
     list_display = ('user', 'name', 'age', 'gender', 'language', 'is_online', 'created_at')
     list_filter = ('gender', 'language', 'is_online')
     search_fields = ('name', 'user__username', 'user__phone_number')
@@ -125,6 +191,7 @@ class CallerProfileAdmin(admin.ModelAdmin):
 
 @admin.register(ListenerProfile)
 class ListenerProfileAdmin(admin.ModelAdmin):
+    form = ListenerProfileAdminForm
     list_display = ('listener_id', 'get_name', 'get_username', 'profession', 'rate_per_second', 'is_on_duty', 'is_busy', 'is_available', 'is_verified', 'rating', 'total_calls', 'total_earned_coins', 'created_at')
     list_filter = ('is_on_duty', 'is_busy', 'is_available', 'is_verified', 'rate_per_second', 'language', 'gender')
     search_fields = ('listener_id', 'name', 'user__username', 'profession__name')

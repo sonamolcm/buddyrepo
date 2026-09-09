@@ -430,6 +430,41 @@
       .grid-2 { grid-template-columns: 1fr; }
     }
 
+    .lang-pill {
+      cursor: pointer;
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      color: #cbd5e1;
+      font-size: 11px;
+      padding: 3px 8px;
+      border-radius: 999px;
+      transition: all 0.15s ease;
+      user-select: none;
+      display: inline-block;
+    }
+    .lang-pill:hover {
+      background: rgba(99, 102, 241, 0.25);
+      border-color: #818cf8;
+      color: #fff;
+    }
+    .lang-pill.active {
+      background: var(--primary);
+      border-color: var(--primary);
+      color: white;
+      font-weight: 600;
+    }
+    select.form-input optgroup {
+      background: #0f172a;
+      color: #94a3b8;
+      font-weight: 700;
+      font-size: 12px;
+    }
+    select.form-input option {
+      background: #1e293b;
+      color: #f8fafc;
+      font-size: 13px;
+    }
+
     /* Modal */
     .modal-overlay {
       position: fixed;
@@ -988,8 +1023,42 @@
               <input type="password" id="agent-password" class="form-input" value="AgentPass123!" required>
             </div>
             <div class="form-group">
-              <label class="form-label">Languages Spoken</label>
-              <input type="text" id="agent-languages" class="form-input" value="English, Hindi" placeholder="e.g. English, Malayalam, Hindi">
+              <label class="form-label">Languages Spoken *</label>
+              <select id="agent-languages" class="form-input" required onchange="handleLanguageChange(this.value)">
+                <optgroup label="Popular Bilingual / Multilingual">
+                  <option value="English, Hindi" selected>English, Hindi</option>
+                  <option value="Malayalam, English">Malayalam, English</option>
+                  <option value="Tamil, English">Tamil, English</option>
+                  <option value="Telugu, English">Telugu, English</option>
+                  <option value="Kannada, English">Kannada, English</option>
+                  <option value="Bengali, English">Bengali, English</option>
+                  <option value="Marathi, Hindi">Marathi, Hindi</option>
+                  <option value="Multilingual (All Languages)">Multilingual (All Languages)</option>
+                </optgroup>
+                <optgroup label="Single Languages">
+                  {% for lang in world_languages %}
+                  <option value="{{ lang.name }}">{{ lang.name }} ({{ lang.native_name }})</option>
+                  {% endfor %}
+                </optgroup>
+                <optgroup label="Custom">
+                  <option value="CUSTOM">Other / Custom Language...</option>
+                </optgroup>
+              </select>
+              <input type="text" id="agent-languages-custom" class="form-input" style="display: none; margin-top: 8px;" placeholder="Enter custom language(s)...">
+
+              <!-- Quick Language Select Pills -->
+              <div style="margin-top: 7px; display: flex; flex-wrap: wrap; gap: 5px; align-items: center;">
+                <span style="font-size: 11px; color: var(--text-muted); font-weight: 500;">Quick Pick:</span>
+                <span class="lang-pill" onclick="quickSelectLang('English')">English</span>
+                <span class="lang-pill" onclick="quickSelectLang('Malayalam')">Malayalam</span>
+                <span class="lang-pill" onclick="quickSelectLang('Hindi')">Hindi</span>
+                <span class="lang-pill" onclick="quickSelectLang('Tamil')">Tamil</span>
+                <span class="lang-pill" onclick="quickSelectLang('Telugu')">Telugu</span>
+                <span class="lang-pill" onclick="quickSelectLang('Kannada')">Kannada</span>
+                <span class="lang-pill" onclick="quickSelectLang('Malayalam, English')">ML + EN</span>
+                <span class="lang-pill" onclick="quickSelectLang('English, Hindi')">EN + HI</span>
+                <span class="lang-pill" onclick="quickSelectLang('Multilingual (All Languages)')">All</span>
+              </div>
             </div>
           </div>
 
@@ -1356,6 +1425,26 @@
       setTimeout(() => { toast.style.display = 'none'; }, 3000);
     }
 
+    // Handle language dropdown custom input toggle
+    function handleLanguageChange(val) {
+      const customInput = document.getElementById('agent-languages-custom');
+      if (customInput) {
+        customInput.style.display = val === 'CUSTOM' ? 'block' : 'none';
+        if (val === 'CUSTOM') customInput.focus();
+      }
+      document.querySelectorAll('.lang-pill').forEach(pill => {
+        pill.classList.toggle('active', pill.textContent.trim() === val.trim());
+      });
+    }
+
+    // Quick select language from pills
+    function quickSelectLang(val) {
+      const select = document.getElementById('agent-languages');
+      if (!select) return;
+      select.value = val;
+      handleLanguageChange(val);
+    }
+
     // Provision Agent Submit
     async function handleCreateAgentSubmit(e) {
       e.preventDefault();
@@ -1364,7 +1453,11 @@
       const category = document.getElementById('agent-category').value;
       const rate = document.getElementById('agent-rate').value;
       const password = document.getElementById('agent-password').value;
-      const languages = document.getElementById('agent-languages').value.trim();
+      let languages = document.getElementById('agent-languages').value.trim();
+      if (languages === 'CUSTOM') {
+        const customVal = document.getElementById('agent-languages-custom').value.trim();
+        languages = customVal || 'English';
+      }
       const bio = document.getElementById('agent-bio').value.trim();
       const isAvailable = document.getElementById('agent-available').checked;
       const msgBox = document.getElementById('create-agent-msg');

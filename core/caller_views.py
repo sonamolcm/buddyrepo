@@ -41,6 +41,7 @@ def admin_panel_view(request: HttpRequest) -> HttpResponse:
         AgentEarning
     )
     from django.db.models import Sum, Count, Q
+    from core.views import WORLD_LANGUAGES
 
     callers_count = User.objects.filter(role__in=['CALLER', 'USER']).count()
     listeners_count = User.objects.filter(role__in=['LISTENER', 'BUDDY', 'AGENT']).count()
@@ -73,6 +74,7 @@ def admin_panel_view(request: HttpRequest) -> HttpResponse:
         'recent_calls': recent_calls,
         'all_users': all_users,
         'categories': categories,
+        'world_languages': WORLD_LANGUAGES,
         'payouts': payouts,
         'wallet_transactions': wallet_transactions,
         'agent_earnings': agent_earnings,
