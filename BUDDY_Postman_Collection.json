@@ -515,6 +515,41 @@
           }
         },
         {
+          "name": "Categories - Search / Filter by Prefix (e.g. 't', 'te', 'do')",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/categories/?search=te",
+              "host": ["{{baseUrl}}"],
+              "path": ["categories", ""],
+              "query": [
+                {
+                  "key": "search",
+                  "value": "te",
+                  "description": "Prefix query (e.g. first letter 't' or letters 'te')"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Categories - Get Category Matches & Count (e.g. Doctor)",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/categories/Doctor/",
+              "host": ["{{baseUrl}}"],
+              "path": ["categories", "Doctor", ""]
+            }
+          }
+        },
+        {
           "name": "Categories - Get One by ID (Authenticated)",
           "request": {
             "method": "GET",
@@ -525,6 +560,20 @@
               "raw": "{{baseUrl}}/categories/1/",
               "host": ["{{baseUrl}}"],
               "path": ["categories", "1", ""]
+            }
+          }
+        },
+        {
+          "name": "Doctor / Listener - Get Details by ID or Username",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/listeners/LISTENER_001/",
+              "host": ["{{baseUrl}}"],
+              "path": ["listeners", "LISTENER_001", ""]
             }
           }
         },

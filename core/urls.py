@@ -303,8 +303,22 @@ urlpatterns = [
 
     path('categories/', CategoryListCreateView.as_view(), name='category-list-create'),
     path('categories', CategoryListCreateView.as_view()),
-    path('categories/<int:id>/', CategoryDetailView.as_view(), name='category-detail'),
-    path('categories/<int:id>', CategoryDetailView.as_view()),
+    path('categories/search/', CategoryListCreateView.as_view(), name='category-search'),
+    path('categories/search', CategoryListCreateView.as_view()),
+    path('categories/<str:identifier>/matches/', CategoryDetailView.as_view(), name='category-matches'),
+    path('categories/<str:identifier>/matches', CategoryDetailView.as_view()),
+    path('categories/<str:identifier>/listeners/', CategoryDetailView.as_view(), name='category-listeners'),
+    path('categories/<str:identifier>/listeners', CategoryDetailView.as_view()),
+    path('categories/<str:category_id>/listeners/<str:identifier>/', ListenerDetailView.as_view(), name='category-listener-detail'),
+    path('categories/<str:category_id>/listeners/<str:identifier>', ListenerDetailView.as_view()),
+    path('categories/<str:identifier>/', CategoryDetailView.as_view(), name='category-detail'),
+    path('categories/<str:identifier>', CategoryDetailView.as_view()),
+
+    # Doctors / Buddies profession alias routes
+    path('doctors/', ListenerListCreateView.as_view(), name='doctor-list'),
+    path('doctors', ListenerListCreateView.as_view()),
+    path('doctors/<str:identifier>/', ListenerDetailView.as_view(), name='doctor-detail'),
+    path('doctors/<str:identifier>', ListenerDetailView.as_view()),
 
     # ==========================================
     # 6.1 APP LEGAL & SUPPORT (TERMS, PRIVACY, HELPLINE)

@@ -309,6 +309,8 @@ class UserDetailSerializer(serializers.ModelSerializer):
 
 class CategorySerializer(serializers.ModelSerializer):
     is_active = serializers.BooleanField(default=True, required=False)
+    count = serializers.SerializerMethodField()
+    matches_count = serializers.SerializerMethodField()
 
     class Meta:
         model = Category
@@ -317,8 +319,23 @@ class CategorySerializer(serializers.ModelSerializer):
             'name',
             'description',
             'is_active',
+            'count',
+            'matches_count',
         )
-        read_only_fields = ('id',)
+        read_only_fields = ('id', 'count', 'matches_count')
+
+    def get_count(self, obj):
+        if hasattr(obj, 'matches_count_annotated'):
+            return obj.matches_count_annotated
+        from .models import User
+        from django.db.models import Q
+        return User.objects.filter(
+            Q(listener_profile__profession=obj) | Q(buddy_profile__profession=obj),
+            is_active=True
+        ).distinct().count()
+
+    def get_matches_count(self, obj):
+        return self.get_count(obj)
 
     def validate_name(self, value):
         name = value.strip()
@@ -1025,12 +1042,12 @@ class AgentRateSerializer(serializers.Serializer):
 
 
 class AgentDutySerializer(serializers.Serializer):
-    is_on_duty = serializers.BooleanField()
-    is_available = serializers.BooleanField()
-    is_busy = serializers.BooleanField()
-    started_at = serializers.DateTimeField(allow_null=True)
-    duty_seconds_today = serializers.IntegerField()
-    duty_time_today_formatted = serializers.CharField()
+    is_on_duty = serializers.BooleanField(required=True)
+    is_available = serializers.BooleanField(read_only=True, required=False)
+    is_busy = serializers.BooleanField(read_only=True, required=False)
+    started_at = serializers.DateTimeField(allow_null=True, read_only=True, required=False)
+    duty_seconds_today = serializers.IntegerField(read_only=True, required=False)
+    duty_time_today_formatted = serializers.CharField(read_only=True, required=False)
 
 
 class AgentEarningSerializer(serializers.ModelSerializer):

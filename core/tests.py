@@ -299,3 +299,142 @@ class AgentDashboardAndPayoutTests(TestCase):
         self.assertEqual(bad_res.status_code, status.HTTP_400_BAD_REQUEST)
         self.wallet.refresh_from_db()
         self.assertEqual(self.wallet.balance, 150)
+
+
+class CategoryFilterAndSearchAPITests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        Category.objects.all().delete()
+        Category.objects.create(name="Teacher", description="Educator", is_active=True)
+        Category.objects.create(name="Technician", description="Technical specialist", is_active=True)
+        Category.objects.create(name="Doctor", description="Physician", is_active=True)
+        Category.objects.create(name="Software Developer", description="Coder", is_active=True)
+        Category.objects.create(name="Student", description="Learner", is_active=True)
+        Category.objects.create(name="Inactive Category", description="Not active", is_active=False)
+
+    def test_list_all_active_categories_without_filter(self):
+        res = self.client.get('/api/categories/')
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        names = [item['name'] for item in res.data]
+        self.assertIn("Teacher", names)
+        self.assertIn("Technician", names)
+        self.assertIn("Doctor", names)
+        self.assertIn("Software Developer", names)
+        self.assertIn("Student", names)
+        self.assertNotIn("Inactive Category", names)
+
+    def test_filter_by_first_letter(self):
+        # Filtering by first letter 't' (case-insensitive)
+        res = self.client.get('/api/categories/?search=t')
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        names = [item['name'] for item in res.data]
+        self.assertEqual(names, ["Teacher", "Technician"])
+
+    def test_filter_by_second_letter_prefix(self):
+        # Filtering by first two letters 'te'
+        res = self.client.get('/api/categories/?search=te')
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        names = [item['name'] for item in res.data]
+        self.assertEqual(names, ["Teacher", "Technician"])
+
+    def test_filter_case_insensitive_uppercase(self):
+        res = self.client.get('/api/categories/?search=DO')
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        names = [item['name'] for item in res.data]
+        self.assertEqual(names, ["Doctor"])
+
+    def test_filter_first_letter_d(self):
+        res = self.client.get('/api/categories/?search=d')
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        names = [item['name'] for item in res.data]
+        self.assertEqual(names, ["Doctor"])
+
+    def test_filter_first_two_letters_st_vs_so(self):
+        res_st = self.client.get('/api/categories/?q=st')
+        self.assertEqual(res_st.status_code, status.HTTP_200_OK)
+        self.assertEqual([item['name'] for item in res_st.data], ["Student"])
+
+        res_so = self.client.get('/api/categories/?starts_with=so')
+        self.assertEqual(res_so.status_code, status.HTTP_200_OK)
+        self.assertEqual([item['name'] for item in res_so.data], ["Software Developer"])
+
+    def test_filter_no_match(self):
+        res = self.client.get('/api/categories/?search=xyz')
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(res.data), 0)
+
+    def test_search_path_endpoint(self):
+        res = self.client.get('/api/categories/search/?search=t')
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        names = [item['name'] for item in res.data]
+        self.assertEqual(names, ["Teacher", "Technician"])
+
+    def test_category_shows_matches_count_and_details_when_selected(self):
+        doctor_cat = Category.objects.get(name="Doctor")
+
+        # Create two doctors
+        u1 = User.objects.create_user(username="dr_smith", password="Pass123!Safe", role="LISTENER", first_name="Dr. Alice Smith", is_active=True)
+        ListenerProfile.objects.create(
+            user=u1,
+            listener_id="dr_smith",
+            name="Dr. Alice Smith",
+            profession=doctor_cat,
+            bio="Cardiologist and wellness guide",
+            rate_per_second=5,
+            rating=4.9,
+            total_calls=15
+        )
+
+        u2 = User.objects.create_user(username="dr_house", password="Pass123!Safe", role="LISTENER", first_name="Dr. Gregory House", is_active=True)
+        ListenerProfile.objects.create(
+            user=u2,
+            listener_id="dr_house",
+            name="Dr. Gregory House",
+            profession=doctor_cat,
+            bio="Diagnostic medicine and health counselor",
+            rate_per_second=10,
+            rating=5.0,
+            total_calls=40
+        )
+
+        # 1. Search category on search bar -> shows match count
+        search_res = self.client.get('/api/categories/?search=doc')
+        self.assertEqual(search_res.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(search_res.data), 1)
+        doc_item = search_res.data[0]
+        self.assertEqual(doc_item['name'], "Doctor")
+        self.assertEqual(doc_item['count'], 2)
+        self.assertEqual(doc_item['matches_count'], 2)
+
+        # 2. Choose Doctor category -> shows count & matches list
+        cat_detail_res = self.client.get(f'/api/categories/{doctor_cat.id}/')
+        self.assertEqual(cat_detail_res.status_code, status.HTTP_200_OK)
+        self.assertEqual(cat_detail_res.data['name'], "Doctor")
+        self.assertEqual(cat_detail_res.data['count'], 2)
+        self.assertEqual(len(cat_detail_res.data['matches']), 2)
+
+        # Also works by category name
+        by_name_res = self.client.get('/api/categories/Doctor/')
+        self.assertEqual(by_name_res.status_code, status.HTTP_200_OK)
+        self.assertEqual(by_name_res.data['count'], 2)
+
+        # 3. Select one doctor -> shows full details
+        doctor_detail_res = self.client.get('/api/listeners/dr_house/')
+        self.assertEqual(doctor_detail_res.status_code, status.HTTP_200_OK)
+        self.assertTrue(doctor_detail_res.data['success'])
+        doc_data = doctor_detail_res.data['data']
+        self.assertEqual(doc_data['username'], 'dr_house')
+        self.assertEqual(doc_data['name'], 'Dr. Gregory House')
+        self.assertEqual(doc_data['profession']['name'], 'Doctor')
+        self.assertEqual(doc_data['bio'], 'Diagnostic medicine and health counselor')
+        self.assertEqual(doc_data['rate_per_second'], 10)
+        self.assertEqual(doc_data['rate_per_minute'], 600)
+        self.assertEqual(doc_data['total_calls'], 40)
+        self.assertEqual(doc_data['rating'], 5.0)
+
+        # 4. Filter listeners by category
+        listener_filter_res = self.client.get('/api/listeners/?category=Doctor')
+        self.assertEqual(listener_filter_res.status_code, status.HTTP_200_OK)
+        self.assertEqual(listener_filter_res.data['count'], 2)
+
+

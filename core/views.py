@@ -2789,7 +2789,7 @@ class CategoryListCreateView(APIView):
         return [IsAdminUser()]
 
     def get(self, request):
-        categories = Category.objects.filter(is_active=True).order_by('id')
+        categories = Category.objects.filter(is_active=True)
         if not categories.exists():
             from .management.commands.seed_categories import INITIAL_CATEGORIES
             for item in INITIAL_CATEGORIES:
@@ -2800,7 +2800,28 @@ class CategoryListCreateView(APIView):
                         "is_active": True,
                     }
                 )
-            categories = Category.objects.filter(is_active=True).order_by('id')
+            categories = Category.objects.filter(is_active=True)
+
+        # Support search bar filtering (first letter, second letter, or prefix)
+        query = (
+            request.query_params.get('search') or
+            request.query_params.get('q') or
+            request.query_params.get('query') or
+            request.query_params.get('starts_with') or
+            request.query_params.get('startswith') or
+            request.query_params.get('prefix') or
+            request.query_params.get('letter') or
+            request.query_params.get('letters') or
+            request.query_params.get('first_letter') or
+            request.query_params.get('name') or
+            ''
+        ).strip()
+
+        if query:
+            categories = categories.filter(name__istartswith=query).order_by('name')
+        else:
+            categories = categories.order_by('id')
+
         serializer = CategorySerializer(categories, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
@@ -2813,47 +2834,135 @@ class CategoryListCreateView(APIView):
         return Response(CategorySerializer(category).data, status=status.HTTP_201_CREATED)
 
 
+def serialize_listener_user(user, request=None):
+    lp = getattr(user, 'listener_profile', None)
+    bp = getattr(user, 'buddy_profile', None)
+
+    profession_obj = None
+    if lp and lp.profession:
+        profession_obj = lp.profession
+    elif bp and bp.profession:
+        profession_obj = bp.profession
+
+    profession_data = None
+    if profession_obj:
+        profession_data = {
+            "id": profession_obj.id,
+            "name": profession_obj.name,
+            "description": profession_obj.description
+        }
+
+    pic_url = None
+    if lp and lp.profile_picture:
+        try:
+            pic_url = request.build_absolute_uri(lp.profile_picture.url) if request else lp.profile_picture.url
+        except Exception:
+            pic_url = str(lp.profile_picture)
+    elif user.profile_picture:
+        try:
+            pic_url = request.build_absolute_uri(user.profile_picture.url) if request else user.profile_picture.url
+        except Exception:
+            pic_url = str(user.profile_picture)
+
+    rate_sec = getattr(lp, 'rate_per_second', 3) if lp else (getattr(bp, 'rate_per_minute', 180) // 60 if bp else 3)
+    rate_min = rate_sec * 60 if rate_sec else (getattr(bp, 'rate_per_minute', 180) if bp else 180)
+
+    return {
+        "id": user.id,
+        "username": user.username,
+        "listener_id": (lp.listener_id if lp and lp.listener_id else user.username),
+        "name": (lp.name if lp and lp.name else (user.first_name or user.username)),
+        "profession": profession_data,
+        "category": profession_data,
+        "bio": (lp.bio if lp else (bp.bio if bp else "")) or "",
+        "gender": (lp.gender if lp else (user.gender or "")) or "",
+        "language": (lp.language if lp else (bp.languages if bp else "English")) or "English",
+        "interests": lp.interests if (lp and lp.interests) else [],
+        "profile_picture": pic_url,
+        "rate_per_second": rate_sec,
+        "rate_per_minute": rate_min,
+        "rating": float(getattr(lp, 'rating', 5.00) if lp else (getattr(bp, 'rating', 5.00) if bp else 5.00)),
+        "total_calls": int(getattr(lp, 'total_calls', 0) if lp else (getattr(bp, 'total_calls', 0) if bp else 0)),
+        "total_earned_coins": int(getattr(lp, 'total_earned_coins', 0) if lp else 0),
+        "is_available": lp.is_available if lp else True,
+        "is_on_duty": lp.is_on_duty if lp else False,
+        "is_busy": getattr(lp, 'is_busy', False) if lp else (getattr(bp, 'is_busy', False) if bp else False),
+        "is_online": getattr(bp, 'is_online', False) if bp else getattr(lp, 'is_on_duty', False),
+        "is_verified": user.is_verified,
+        "is_active": user.is_active,
+        "created_at": user.created_at
+    }
+
+
 class CategoryDetailView(APIView):
     """
-    GET /api/categories/<id>/
-    - Return the category only if is_active=True.
-    - If it doesn't exist or is inactive, return HTTP 404.
+    GET /api/categories/<id_or_name>/
+    - Return the category with match count and list of matches (doctors, teachers, etc.)
+    - Return 404 if inactive or not found.
     - Public endpoint for GET.
 
-    PUT /api/categories/<id>/
-    PATCH /api/categories/<id>/
+    PUT /api/categories/<id_or_name>/
+    PATCH /api/categories/<id_or_name>/
     - Admin only.
-    - Allow updating name, description, is_active.
+    - Update name, description, is_active.
 
-    DELETE /api/categories/<id>/
+    DELETE /api/categories/<id_or_name>/
     - Admin only.
-    - Soft delete: category.is_active = False; category.save().
-    - Return a suitable success response.
+    - Soft delete.
     """
     def get_permissions(self):
         if self.request.method == 'GET':
             return [permissions.AllowAny()]
         return [IsAdminUser()]
 
-    def get(self, request, id):
-        category = Category.objects.filter(pk=id, is_active=True).first()
+    def _get_category(self, identifier):
+        if identifier is None:
+            return None
+        ident_str = str(identifier).strip()
+        if ident_str.isdigit():
+            cat = Category.objects.filter(pk=int(ident_str), is_active=True).first()
+            if cat:
+                return cat
+        return Category.objects.filter(name__iexact=ident_str, is_active=True).first()
+
+    def get(self, request, id=None, identifier=None):
+        ident = id if id is not None else identifier
+        category = self._get_category(ident)
         if not category:
             return Response(
-                {"detail": "Category not found or is inactive."},
+                {"detail": f"Category '{ident}' not found or is inactive."},
                 status=status.HTTP_404_NOT_FOUND
             )
 
+        users = User.objects.filter(
+            Q(listener_profile__profession=category) | Q(buddy_profile__profession=category),
+            is_active=True
+        ).select_related('listener_profile', 'buddy_profile').distinct()
+
+        matches = [serialize_listener_user(u, request) for u in users]
+
         serializer = CategorySerializer(category)
-        return Response(serializer.data, status=status.HTTP_200_OK)
+        data = dict(serializer.data)
+        data["count"] = len(matches)
+        data["matches_count"] = len(matches)
+        data["matches"] = matches
+        return Response(data, status=status.HTTP_200_OK)
 
-    def put(self, request, id):
-        return self._update(request, id, partial=False)
+    def put(self, request, id=None, identifier=None):
+        return self._update(request, id=id, identifier=identifier, partial=False)
 
-    def patch(self, request, id):
-        return self._update(request, id, partial=True)
+    def patch(self, request, id=None, identifier=None):
+        return self._update(request, id=id, identifier=identifier, partial=True)
 
-    def _update(self, request, id, partial=True):
-        category = Category.objects.filter(pk=id).first()
+    def _update(self, request, id=None, identifier=None, partial=True):
+        ident = id if id is not None else identifier
+        category = None
+        ident_str = str(ident).strip() if ident is not None else None
+        if ident_str and ident_str.isdigit():
+            category = Category.objects.filter(pk=int(ident_str)).first()
+        elif ident_str:
+            category = Category.objects.filter(name__iexact=ident_str).first()
+
         if not category:
             return Response(
                 {"detail": "Category not found."},
@@ -2867,8 +2976,15 @@ class CategoryDetailView(APIView):
         updated_category = serializer.save()
         return Response(CategorySerializer(updated_category).data, status=status.HTTP_200_OK)
 
-    def delete(self, request, id):
-        category = Category.objects.filter(pk=id).first()
+    def delete(self, request, id=None, identifier=None):
+        ident = id if id is not None else identifier
+        category = None
+        ident_str = str(ident).strip() if ident is not None else None
+        if ident_str and ident_str.isdigit():
+            category = Category.objects.filter(pk=int(ident_str)).first()
+        elif ident_str:
+            category = Category.objects.filter(name__iexact=ident_str).first()
+
         if not category:
             return Response(
                 {"detail": "Category not found."},
@@ -4210,22 +4326,39 @@ class ListenerListCreateView(APIView):
     permission_classes = [permissions.AllowAny]
 
     def get(self, request):
-        listeners = User.objects.filter(role__in=['LISTENER', 'BUDDY']).select_related('listener_profile').order_by('-created_at')
-        data = []
-        for u in listeners:
-            prof = getattr(u, 'listener_profile', None)
-            data.append({
-                "id": u.id,
-                "username": u.username,
-                "listener_id": prof.listener_id if prof else u.username,
-                "name": prof.name if prof else (u.first_name or u.username),
-                "gender": prof.gender if prof else u.gender,
-                "language": prof.language if prof else "English",
-                "interests": prof.interests if prof else [],
-                "is_active": u.is_active,
-                "is_available": prof.is_available if prof else True,
-                "created_at": u.created_at
-            })
+        listeners = User.objects.filter(role__in=['LISTENER', 'BUDDY']).select_related('listener_profile', 'buddy_profile').order_by('-created_at')
+
+        cat_param = (
+            request.query_params.get('category') or
+            request.query_params.get('category_id') or
+            request.query_params.get('profession') or
+            request.query_params.get('profession_id') or
+            ''
+        ).strip()
+
+        if cat_param:
+            if cat_param.isdigit():
+                listeners = listeners.filter(
+                    Q(listener_profile__profession_id=int(cat_param)) |
+                    Q(buddy_profile__profession_id=int(cat_param))
+                )
+            else:
+                listeners = listeners.filter(
+                    Q(listener_profile__profession__name__iexact=cat_param) |
+                    Q(buddy_profile__profession__name__iexact=cat_param)
+                )
+
+        search_query = (request.query_params.get('search') or request.query_params.get('q') or '').strip()
+        if search_query:
+            listeners = listeners.filter(
+                Q(first_name__icontains=search_query) |
+                Q(username__icontains=search_query) |
+                Q(listener_profile__name__icontains=search_query) |
+                Q(listener_profile__profession__name__icontains=search_query) |
+                Q(buddy_profile__profession__name__icontains=search_query)
+            )
+
+        data = [serialize_listener_user(u, request) for u in listeners]
         return Response({
             "success": True,
             "count": len(data),
@@ -4244,6 +4377,12 @@ class ListenerListCreateView(APIView):
         is_available = request.data.get('is_available', True)
         if isinstance(is_available, str):
             is_available = is_available.lower() in ('true', '1', 'yes')
+
+        profession = request.data.get('profession') or request.data.get('category')
+        cat_obj = None
+        if profession:
+            prof_str = str(profession).strip()
+            cat_obj = Category.objects.filter(pk=int(prof_str)).first() if prof_str.isdigit() else Category.objects.filter(name__iexact=prof_str).first()
 
         if not username:
             return Response({"success": False, "message": "username / listener_id is required."}, status=status.HTTP_400_BAD_REQUEST)
@@ -4267,27 +4406,21 @@ class ListenerListCreateView(APIView):
             defaults={
                 'listener_id': username,
                 'name': name,
+                'profession': cat_obj,
                 'language': language,
                 'gender': gender,
                 'interests': interests,
                 'is_available': is_available
             }
         )
+        if cat_obj and profile.profession != cat_obj:
+            profile.profession = cat_obj
+            profile.save(update_fields=['profession'])
 
         return Response({
             "success": True,
             "message": f"Listener '{username}' created successfully.",
-            "data": {
-                "id": user.id,
-                "username": user.username,
-                "listener_id": profile.listener_id,
-                "name": profile.name,
-                "language": profile.language,
-                "gender": profile.gender,
-                "interests": profile.interests,
-                "is_available": profile.is_available,
-                "created_at": user.created_at
-            }
+            "data": serialize_listener_user(user, request)
         }, status=status.HTTP_201_CREATED)
 
     def delete(self, request):
@@ -4343,27 +4476,16 @@ class ListenerDetailView(APIView):
                 user = prof.user
         return user
 
-    def get(self, request, identifier):
+    def get(self, request, identifier, category_id=None):
         user = self._get_listener(identifier)
         if not user:
             available = list(User.objects.filter(Q(role__in=['LISTENER', 'BUDDY']) | Q(listener_profile__isnull=False)).values_list('username', flat=True))
             return Response({"success": False, "message": f"Listener '{identifier}' not found.", "available_listeners": available}, status=status.HTTP_404_NOT_FOUND)
 
-        lp, _ = ListenerProfile.objects.get_or_create(user=user, defaults={'listener_id': user.username})
+        data = serialize_listener_user(user, request)
         return Response({
             "success": True,
-            "data": {
-                "id": user.id,
-                "username": user.username,
-                "listener_id": lp.listener_id,
-                "name": lp.name,
-                "gender": lp.gender,
-                "language": lp.language,
-                "interests": lp.interests,
-                "is_active": user.is_active,
-                "is_available": lp.is_available,
-                "created_at": user.created_at,
-            }
+            "data": data
         }, status=status.HTTP_200_OK)
 
     def patch(self, request, identifier):
@@ -4387,6 +4509,15 @@ class ListenerDetailView(APIView):
             lp.gender = data['gender']
         if 'language' in data:
             lp.language = data['language']
+        if 'bio' in data:
+            lp.bio = data['bio']
+        if 'profession' in data or 'category' in data:
+            prof_val = data.get('profession') or data.get('category')
+            if prof_val:
+                prof_str = str(prof_val).strip()
+                cat_obj = Category.objects.filter(pk=int(prof_str)).first() if prof_str.isdigit() else Category.objects.filter(name__iexact=prof_str).first()
+                if cat_obj:
+                    lp.profession = cat_obj
         if 'interests' in data:
             interests = data['interests']
             if isinstance(interests, str):
@@ -4407,17 +4538,7 @@ class ListenerDetailView(APIView):
         return Response({
             "success": True,
             "message": "Listener updated successfully.",
-            "data": {
-                "id": user.id,
-                "username": user.username,
-                "listener_id": lp.listener_id,
-                "name": lp.name,
-                "gender": lp.gender,
-                "language": lp.language,
-                "interests": lp.interests,
-                "is_active": user.is_active,
-                "is_available": lp.is_available,
-            }
+            "data": serialize_listener_user(user, request)
         }, status=status.HTTP_200_OK)
 
     def delete(self, request, identifier=None):
@@ -4705,13 +4826,30 @@ class AgentProfessionsView(APIView):
     permission_classes = [permissions.IsAuthenticated, IsAgentUser]
 
     def get(self, request):
-        categories = Category.objects.filter(is_active=True).order_by('order', 'name')
+        categories = Category.objects.filter(is_active=True)
+        query = (
+            request.query_params.get('search') or
+            request.query_params.get('q') or
+            request.query_params.get('query') or
+            request.query_params.get('starts_with') or
+            request.query_params.get('startswith') or
+            request.query_params.get('prefix') or
+            request.query_params.get('letter') or
+            request.query_params.get('letters') or
+            request.query_params.get('first_letter') or
+            request.query_params.get('name') or
+            ''
+        ).strip()
+        if query:
+            categories = categories.filter(name__istartswith=query)
+        categories = categories.order_by('name')
+
         data = [
             {
                 "id": c.id,
                 "name": c.name,
-                "icon": c.icon or "",
-                "image": request.build_absolute_uri(c.image.url) if c.image and hasattr(c.image, 'url') else None,
+                "icon": getattr(c, 'icon', "") or "",
+                "image": request.build_absolute_uri(c.image.url) if hasattr(c, 'image') and c.image and hasattr(c.image, 'url') else None,
                 "description": c.description or ""
             }
             for c in categories
@@ -4819,15 +4957,27 @@ class AgentDutyView(APIView):
         }, status=status.HTTP_200_OK)
 
     def post(self, request):
-        serializer = AgentDutySerializer(data=request.data)
-        if not serializer.is_valid():
-            return Response({
-                "success": False,
-                "message": serializer.errors
-            }, status=status.HTTP_400_BAD_REQUEST)
+        val = request.data.get('is_on_duty')
+        if val is None:
+            val = request.data.get('duty')
+        if val is None and isinstance(request.data.get('status'), str):
+            val = request.data.get('status').strip().upper() in ('ON', 'TRUE', '1', 'ACTIVE')
 
-        is_on_duty = serializer.validated_data['is_on_duty']
-        if is_on_duty:
+        if val is None:
+            serializer = AgentDutySerializer(data=request.data)
+            if not serializer.is_valid():
+                return Response({
+                    "success": False,
+                    "message": serializer.errors
+                }, status=status.HTTP_400_BAD_REQUEST)
+            val = serializer.validated_data['is_on_duty']
+        else:
+            if isinstance(val, str):
+                val = val.lower() in ('true', '1', 'yes', 'on')
+            else:
+                val = bool(val)
+
+        if val:
             return AgentDutyOnView().post(request)
         else:
             return AgentDutyOffView().post(request)
