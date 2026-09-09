@@ -23,14 +23,24 @@ def generate_otp_code() -> str:
     return f"{random.randint(1000, 9999)}"
 
 
-def generate_verification_token(phone_number: str, purpose: str = 'SIGNUP') -> str:
+def generate_verification_token(phone_number: str, purpose: str = 'SIGNUP', extra_data: dict | None = None) -> str:
     """Generates a cryptographically signed single-use token valid for 15 minutes."""
     data = {
         'phone_number': phone_number,
         'purpose': purpose,
         'timestamp': timezone.now().isoformat()
     }
+    if extra_data and isinstance(extra_data, dict):
+        data.update(extra_data)
     return signing.dumps(data)
+
+
+def decode_verification_token_payload(token: str) -> dict:
+    """Safely extracts all stored payload data from a verification token."""
+    try:
+        return signing.loads(token, max_age=900)
+    except Exception:
+        return {}
 
 
 def validate_verification_token(token: str, expected_phone: str | None = None, expected_purpose: str = 'SIGNUP') -> tuple[bool, str, str]:
@@ -47,6 +57,7 @@ def validate_verification_token(token: str, expected_phone: str | None = None, e
         return False, "Verification token has expired. Please verify your phone again.", ""
     except signing.BadSignature:
         return False, "Invalid verification token.", ""
+
 
 
 def create_and_send_otp(phone_number: str, purpose: str = 'SIGNUP') -> tuple[bool, str, str]:

@@ -162,6 +162,19 @@ USE_TZ = True
 
 STATIC_URL = '/static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
+STATICFILES_DIRS = [BASE_DIR / 'static']
+
+# Ensure Gabby Talk branding asset is synchronized
+try:
+    import os, shutil
+    _src_logo = r"C:\Users\SONA\.gemini\antigravity-ide\brain\2545965a-d412-4e3f-a386-e4674baed1ac\.user_uploaded\media_1788946290772.jpg"
+    _dst_dir = os.path.join(BASE_DIR, 'static', 'images')
+    _dst_logo = os.path.join(_dst_dir, 'gabby_talk_logo.jpg')
+    os.makedirs(_dst_dir, exist_ok=True)
+    if os.path.exists(_src_logo) and not os.path.exists(_dst_logo):
+        shutil.copy(_src_logo, _dst_logo)
+except Exception:
+    pass
 
 
 # Email

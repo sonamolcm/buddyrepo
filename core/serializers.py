@@ -7,6 +7,7 @@ from .models import (
     ListenerProfile,
     OTPVerification,
     Category,
+    Interest,
     Wallet,
     Call,
     CallReview,
@@ -17,6 +18,67 @@ from .models import (
     AgentPayout,
 )
 
+
+def normalize_interests(raw_val) -> list:
+    """
+    Normalizes any interest input (list of strings, comma-separated string,
+    list of dicts with 'name', list of IDs, or single string) into a clean list of strings.
+    """
+    if not raw_val:
+        return []
+
+    # If it's a JSON-encoded string like '["Music", "Reading"]'
+    if isinstance(raw_val, str):
+        val_str = raw_val.strip()
+        if (val_str.startswith('[') and val_str.endswith(']')) or (val_str.startswith('{') and val_str.endswith('}')):
+            try:
+                import json
+                parsed = json.loads(val_str)
+                return normalize_interests(parsed)
+            except Exception:
+                pass
+        # Comma-separated string like "Music, Movies, Travel"
+        return [item.strip() for item in val_str.split(',') if item.strip()]
+
+    # If it's a list or tuple or set
+    if isinstance(raw_val, (list, tuple, set)):
+        result = []
+        id_list = []
+        for item in raw_val:
+            if isinstance(item, str):
+                item_clean = item.strip()
+                if item_clean:
+                    if ',' in item_clean:
+                        result.extend([p.strip() for p in item_clean.split(',') if p.strip()])
+                    else:
+                        result.append(item_clean)
+            elif isinstance(item, dict):
+                name = item.get('name') or item.get('title') or item.get('label') or item.get('interest')
+                if name and isinstance(name, str) and name.strip():
+                    result.append(name.strip())
+                elif item.get('id'):
+                    id_list.append(item.get('id'))
+            elif isinstance(item, (int, float)):
+                id_list.append(int(item))
+
+        if id_list:
+            try:
+                db_names = list(Interest.objects.filter(id__in=id_list).values_list('name', flat=True))
+                result.extend(db_names)
+            except Exception:
+                pass
+
+        # Deduplicate preserving order
+        seen = set()
+        deduped = []
+        for r in result:
+            low = r.lower()
+            if low not in seen:
+                seen.add(low)
+                deduped.append(r)
+        return deduped
+
+    return [str(raw_val).strip()] if str(raw_val).strip() else []
 
 
 # ==========================================
@@ -44,16 +106,31 @@ class CallerSignupVerifyOTPSerializer(serializers.Serializer):
 
 class CallerSignupCompleteProfileSerializer(serializers.Serializer):
     verification_token = serializers.CharField(write_only=True)
-    phone_number = serializers.CharField(max_length=17, required=False, allow_blank=True, default='')
+    phone_number = serializers.CharField(max_length=25, required=False, allow_blank=True, default='')
     name = serializers.CharField(max_length=100)
     age = serializers.IntegerField(min_value=13, max_value=120)
     gender = serializers.ChoiceField(choices=User.GENDER_CHOICES)
     language = serializers.CharField(max_length=50, default='English', required=False)
-    interests = serializers.ListField(
-        child=serializers.CharField(max_length=50),
-        required=False,
-        default=list
-    )
+    interests = serializers.JSONField(required=False, default=list)
+    interest = serializers.JSONField(required=False, default=list)
+
+    def to_internal_value(self, data):
+        mutable_data = data.copy() if hasattr(data, 'copy') else dict(data)
+        raw_interests = (
+            mutable_data.get('interests') or 
+            mutable_data.get('interest') or 
+            mutable_data.get('user_interests') or 
+            mutable_data.get('caller_interests')
+        )
+        if raw_interests is not None:
+            mutable_data['interests'] = normalize_interests(raw_interests)
+        return super().to_internal_value(mutable_data)
+
+    def validate(self, attrs):
+        raw = attrs.get('interests') or attrs.get('interest') or []
+        attrs['interests'] = normalize_interests(raw)
+        return attrs
+
 
 
 # ==========================================
@@ -243,6 +320,13 @@ class CallerProfileSerializer(serializers.ModelSerializer):
             return round(float(avg), 1) if avg is not None else 5.0
         except Exception:
             return 5.0
+
+    def to_internal_value(self, data):
+        mutable_data = data.copy() if hasattr(data, 'copy') else dict(data)
+        raw_interests = mutable_data.get('interests') or mutable_data.get('interest') or mutable_data.get('user_interests')
+        if raw_interests is not None:
+            mutable_data['interests'] = normalize_interests(raw_interests)
+        return super().to_internal_value(mutable_data)
 
     def update(self, instance, validated_data):
         instance = super().update(instance, validated_data)

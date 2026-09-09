@@ -1,0 +1,72 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 500" width="100%" height="100%">
+  <defs>
+    <linearGradient id="gabbyGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#00D8A5"/>
+      <stop offset="35%" stop-color="#00A8F3"/>
+      <stop offset="70%" stop-color="#0066E8"/>
+      <stop offset="100%" stop-color="#0040C0"/>
+    </linearGradient>
+    <filter id="dropShadow" x="-10%" y="-10%" width="130%" height="130%">
+      <feDropShadow dx="0" dy="6" stdDeviation="8" flood-opacity="0.12"/>
+    </filter>
+  </defs>
+
+  <!-- Squircle Base -->
+  <rect width="500" height="500" rx="110" fill="#FFFFFF"/>
+
+  <!-- Main G-shaped Speech Bubble Mark -->
+  <g transform="translate(0, -25)">
+    <!-- G / Speech Bubble Contour -->
+    <path d="
+      M 250, 75
+      C 345, 75 422, 152 422, 247
+      C 422, 342 345, 419 250, 419
+      C 220, 419 192, 411 168, 397
+      L 125, 428
+      L 135, 375
+      C 95, 343 78, 297 78, 247
+      C 78, 152 155, 75 250, 75 Z
+      M 250, 145
+      C 194, 145 148, 191 148, 247
+      C 148, 303 194, 349 250, 349
+      C 306, 349 352, 303 352, 247
+      L 250, 247
+      L 250, 202
+      L 395, 202
+      C 400, 216 402, 231 402, 247
+      C 402, 331 334, 399 250, 399
+      C 222, 399 196, 391 174, 378
+      L 142, 401
+      L 150, 360
+      C 117, 331 98, 291 98, 247
+      C 98, 163 166, 95 250, 95
+      C 298, 95 340, 117 368, 152
+      L 332, 180
+      C 313, 158 283, 145 250, 145 Z
+    " fill="url(#gabbyGrad)"/>
+
+    <!-- Handset in Center -->
+    <path d="
+      M 205, 195
+      C 198, 188 187, 188 180, 195
+      L 165, 210
+      C 158, 217 156, 228 161, 237
+      C 175, 263 200, 296 235, 318
+      C 244, 324 255, 323 262, 316
+      L 278, 300
+      C 285, 293 285, 282 278, 275
+      L 256, 253
+      C 250, 247 240, 248 234, 254
+      L 226, 262
+      C 207, 251 192, 236 182, 217
+      L 190, 209
+      C 196, 203 197, 193 191, 187
+      Z
+    " fill="#0C2340"/>
+
+    <!-- Audio Wave Bars -->
+    <rect x="282" y="200" width="14" height="42" rx="7" fill="#F5A623"/>
+    <rect x="303" y="180" width="14" height="82" rx="7" fill="#F5A623"/>
+    <rect x="324" y="196" width="14" height="50" rx="7" fill="#F5A623"/>
+  </g>
+</svg>

@@ -24,8 +24,8 @@ from .models import (
 )
 
 # Admin Site Header Branding
-admin.site.site_header = "Buddy Administration Portal"
-admin.site.site_title = "Buddy Admin"
+admin.site.site_header = "Gabby Talk Administration Portal"
+admin.site.site_title = "Gabby Talk Admin"
 admin.site.index_title = "Platform & User Management Dashboard"
 
 

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Buddy - Admin Panel</title>
+  <title>Gabby Talk - Admin Panel</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -53,31 +53,69 @@
       display: flex;
       align-items: center;
       gap: 12px;
-      margin-bottom: 28px;
-      padding-left: 6px;
+      margin-bottom: 26px;
+      padding: 4px 6px;
     }
-    .brand-icon {
-      width: 44px;
-      height: 44px;
-      background: var(--primary-gradient);
+    .brand-logo-wrap {
+      width: 48px;
+      height: 48px;
       border-radius: 14px;
+      overflow: hidden;
       display: flex;
       align-items: center;
       justify-content: center;
-      font-size: 22px;
-      box-shadow: 0 8px 20px -4px rgba(99, 102, 241, 0.5);
+      background: #ffffff;
+      box-shadow: 0 4px 16px rgba(0, 210, 160, 0.25), 0 2px 6px rgba(0, 0, 0, 0.3);
+      flex-shrink: 0;
+      border: 1px solid rgba(255, 255, 255, 0.2);
     }
-    .brand-text {
+    .brand-logo-img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+    .brand-svg-fallback {
+      display: none;
+      width: 100%;
+      height: 100%;
+      align-items: center;
+      justify-content: center;
+      background: #ffffff;
+    }
+    .brand-text-wrap {
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      min-width: 0;
+    }
+    .brand-title {
       font-family: 'Outfit', sans-serif;
       font-weight: 800;
-      font-size: 20px;
-      letter-spacing: -0.5px;
+      font-size: 21px;
+      letter-spacing: -0.4px;
+      line-height: 1.15;
+    }
+    .brand-gabby {
+      color: #ffffff;
+    }
+    .brand-talk {
+      color: #00D2A0;
+      margin-left: 1px;
+    }
+    .brand-tagline {
+      font-size: 9px;
+      font-weight: 600;
+      color: #94a3b8;
+      letter-spacing: -0.1px;
+      white-space: nowrap;
+      margin-top: 3px;
     }
     .brand-badge {
       font-size: 10px;
       font-weight: 700;
-      background: rgba(99, 102, 241, 0.2);
-      color: #818cf8;
+      background: rgba(0, 210, 160, 0.15);
+      color: #00D2A0;
       padding: 2px 8px;
       border-radius: 20px;
       margin-left: 4px;
@@ -465,6 +503,31 @@
       font-size: 13px;
     }
 
+    .lang-tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(99, 102, 241, 0.22);
+      border: 1px solid rgba(129, 140, 248, 0.45);
+      color: #e0e7ff;
+      font-size: 12px;
+      font-weight: 500;
+      padding: 3px 9px;
+      border-radius: 6px;
+      user-select: none;
+    }
+    .lang-tag-remove {
+      cursor: pointer;
+      color: #cbd5e1;
+      font-weight: bold;
+      font-size: 13px;
+      line-height: 1;
+      padding: 0 2px;
+    }
+    .lang-tag-remove:hover {
+      color: #f87171;
+    }
+
     /* Modal */
     .modal-overlay {
       position: fixed;
@@ -526,8 +589,32 @@
   <!-- Left Sidebar with Exactly the 9 Requested Items -->
   <aside class="sidebar">
     <div class="brand">
-      <div class="brand-icon">🫂</div>
-      <div class="brand-text">BUDDY</div>
+      <div class="brand-logo-wrap">
+        <img src="{{ app_logo_url|default:'/static/images/gabby_talk_logo.jpg' }}" alt="Gabby Talk" class="brand-logo-img" onerror="this.style.display='none'; document.getElementById('brand-svg-fallback').style.display='flex';">
+        <div id="brand-svg-fallback" class="brand-svg-fallback">
+          <svg viewBox="0 0 100 100" width="36" height="36" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <rect width="100" height="100" rx="22" fill="#ffffff"/>
+            <path d="M50 16C31.2 16 16 31.2 16 50C16 68.8 31.2 84 50 84C68.8 84 84 68.8 84 50H50V62H68.8C64.6 72 54.4 78 50 78C34.5 78 22 65.5 22 50C22 34.5 34.5 22 50 22C58.5 22 66 25.8 71 31.8L79.5 23.3C72 16 62 16 50 16Z" fill="url(#gabby-grad)"/>
+            <path d="M42 40C39.8 40 38 41.8 38 44C38 52.8 45.2 60 54 60C56.2 60 58 58.2 58 56L55 49L49 51C47.2 49 46 47 44.5 44.5L47 38.5L42 40Z" fill="#1e293b"/>
+            <circle cx="56" cy="42" r="2.5" fill="#f59e0b"/>
+            <circle cx="62" cy="40" r="3" fill="#f59e0b"/>
+            <circle cx="68" cy="43" r="2" fill="#f59e0b"/>
+            <defs>
+              <linearGradient id="gabby-grad" x1="16" y1="16" x2="84" y2="84" gradientUnits="userSpaceOnUse">
+                <stop stop-color="#00D2A0"/>
+                <stop offset="0.5" stop-color="#0099FF"/>
+                <stop offset="1" stop-color="#0055FF"/>
+              </linearGradient>
+            </defs>
+          </svg>
+        </div>
+      </div>
+      <div class="brand-text-wrap">
+        <div class="brand-title">
+          <span class="brand-gabby">Gabby</span><span class="brand-talk">Talk</span>
+        </div>
+        <div class="brand-tagline">Real People • Meaningful Conversations</div>
+      </div>
     </div>
 
     <ul class="nav-list">
@@ -1023,41 +1110,40 @@
               <input type="password" id="agent-password" class="form-input" value="AgentPass123!" required>
             </div>
             <div class="form-group">
-              <label class="form-label">Languages Spoken *</label>
-              <select id="agent-languages" class="form-input" required onchange="handleLanguageChange(this.value)">
-                <optgroup label="Popular Bilingual / Multilingual">
-                  <option value="English, Hindi" selected>English, Hindi</option>
-                  <option value="Malayalam, English">Malayalam, English</option>
-                  <option value="Tamil, English">Tamil, English</option>
-                  <option value="Telugu, English">Telugu, English</option>
-                  <option value="Kannada, English">Kannada, English</option>
-                  <option value="Bengali, English">Bengali, English</option>
-                  <option value="Marathi, Hindi">Marathi, Hindi</option>
-                  <option value="Multilingual (All Languages)">Multilingual (All Languages)</option>
-                </optgroup>
-                <optgroup label="Single Languages">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                <label class="form-label" style="margin-bottom: 0;">Languages Spoken (Comma-separated) *</label>
+                <button type="button" onclick="clearLanguages()" style="background: none; border: none; color: #94a3b8; font-size: 11px; cursor: pointer; text-decoration: underline;">Clear All</button>
+              </div>
+
+              <!-- Main Input Field (Comma separated, directly editable & populated by dropdown) -->
+              <input type="text" id="agent-languages" class="form-input" value="English, Hindi" required 
+                     placeholder="e.g. English, Malayalam, Hindi" oninput="onLanguageInputManual(this.value)"
+                     style="font-weight: 500; letter-spacing: 0.2px;">
+
+              <!-- Visual Selected Language Tag Chips -->
+              <div id="selected-lang-tags" style="display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px;"></div>
+
+              <!-- Language Dropdown: Pick one to append after comma -->
+              <div style="margin-top: 8px;">
+                <select id="agent-language-picker" class="form-input" onchange="addLanguageFromDropdown(this.value)" style="border-color: rgba(99, 102, 241, 0.45); background: rgba(30, 41, 59, 0.95);">
+                  <option value="" selected disabled>➕ Choose language to add (appends after comma)...</option>
                   {% for lang in world_languages %}
                   <option value="{{ lang.name }}">{{ lang.name }} ({{ lang.native_name }})</option>
                   {% endfor %}
-                </optgroup>
-                <optgroup label="Custom">
-                  <option value="CUSTOM">Other / Custom Language...</option>
-                </optgroup>
-              </select>
-              <input type="text" id="agent-languages-custom" class="form-input" style="display: none; margin-top: 8px;" placeholder="Enter custom language(s)...">
+                </select>
+              </div>
 
               <!-- Quick Language Select Pills -->
-              <div style="margin-top: 7px; display: flex; flex-wrap: wrap; gap: 5px; align-items: center;">
-                <span style="font-size: 11px; color: var(--text-muted); font-weight: 500;">Quick Pick:</span>
-                <span class="lang-pill" onclick="quickSelectLang('English')">English</span>
-                <span class="lang-pill" onclick="quickSelectLang('Malayalam')">Malayalam</span>
-                <span class="lang-pill" onclick="quickSelectLang('Hindi')">Hindi</span>
-                <span class="lang-pill" onclick="quickSelectLang('Tamil')">Tamil</span>
-                <span class="lang-pill" onclick="quickSelectLang('Telugu')">Telugu</span>
-                <span class="lang-pill" onclick="quickSelectLang('Kannada')">Kannada</span>
-                <span class="lang-pill" onclick="quickSelectLang('Malayalam, English')">ML + EN</span>
-                <span class="lang-pill" onclick="quickSelectLang('English, Hindi')">EN + HI</span>
-                <span class="lang-pill" onclick="quickSelectLang('Multilingual (All Languages)')">All</span>
+              <div style="margin-top: 8px; display: flex; flex-wrap: wrap; gap: 5px; align-items: center;">
+                <span style="font-size: 11px; color: var(--text-muted); font-weight: 500;">Quick Add:</span>
+                <span class="lang-pill" onclick="toggleLanguagePill('English')">+ English</span>
+                <span class="lang-pill" onclick="toggleLanguagePill('Malayalam')">+ Malayalam</span>
+                <span class="lang-pill" onclick="toggleLanguagePill('Hindi')">+ Hindi</span>
+                <span class="lang-pill" onclick="toggleLanguagePill('Tamil')">+ Tamil</span>
+                <span class="lang-pill" onclick="toggleLanguagePill('Telugu')">+ Telugu</span>
+                <span class="lang-pill" onclick="toggleLanguagePill('Kannada')">+ Kannada</span>
+                <span class="lang-pill" onclick="toggleLanguagePill('Bengali')">+ Bengali</span>
+                <span class="lang-pill" onclick="toggleLanguagePill('Arabic')">+ Arabic</span>
               </div>
             </div>
           </div>
@@ -1289,7 +1375,7 @@
           <div class="grid-2">
             <div class="form-group">
               <label class="form-label">Platform Name</label>
-              <input type="text" id="setting-platform-name" class="form-input" value="Buddy Platform">
+              <input type="text" id="setting-platform-name" class="form-input" value="Gabby Talk">
             </div>
             <div class="form-group">
               <label class="form-label">Coin to INR Conversion (1 Coin = ? INR)</label>
@@ -1425,24 +1511,90 @@
       setTimeout(() => { toast.style.display = 'none'; }, 3000);
     }
 
-    // Handle language dropdown custom input toggle
-    function handleLanguageChange(val) {
-      const customInput = document.getElementById('agent-languages-custom');
-      if (customInput) {
-        customInput.style.display = val === 'CUSTOM' ? 'block' : 'none';
-        if (val === 'CUSTOM') customInput.focus();
-      }
-      document.querySelectorAll('.lang-pill').forEach(pill => {
-        pill.classList.toggle('active', pill.textContent.trim() === val.trim());
-      });
+    // Parse current languages from input into trimmed array
+    function getCurrentLanguages() {
+      const input = document.getElementById('agent-languages');
+      if (!input) return [];
+      return input.value
+        .split(',')
+        .map(s => s.trim())
+        .filter(s => s.length > 0);
     }
 
-    // Quick select language from pills
-    function quickSelectLang(val) {
-      const select = document.getElementById('agent-languages');
-      if (!select) return;
-      select.value = val;
-      handleLanguageChange(val);
+    // Set languages array back to input and render tags + pills
+    function setLanguages(langs) {
+      const input = document.getElementById('agent-languages');
+      if (!input) return;
+      const unique = [];
+      langs.forEach(l => {
+        const clean = l.trim();
+        if (clean && !unique.some(u => u.toLowerCase() === clean.toLowerCase())) {
+          unique.push(clean);
+        }
+      });
+      input.value = unique.join(', ');
+      renderLanguageTagsAndPills();
+    }
+
+    // Add a language from the dropdown after a comma
+    function addLanguageFromDropdown(val) {
+      if (!val) return;
+      const current = getCurrentLanguages();
+      if (!current.some(l => l.toLowerCase() === val.toLowerCase())) {
+        current.push(val);
+        setLanguages(current);
+      }
+      const picker = document.getElementById('agent-language-picker');
+      if (picker) picker.selectedIndex = 0;
+    }
+
+    // Toggle language from quick pick pills
+    function toggleLanguagePill(val) {
+      const current = getCurrentLanguages();
+      const idx = current.findIndex(l => l.toLowerCase() === val.toLowerCase());
+      if (idx >= 0) {
+        current.splice(idx, 1);
+      } else {
+        current.push(val);
+      }
+      setLanguages(current);
+    }
+
+    // Remove single language tag chip
+    function removeLanguageTag(val) {
+      const current = getCurrentLanguages().filter(l => l.toLowerCase() !== val.toLowerCase());
+      setLanguages(current);
+    }
+
+    // Clear all languages
+    function clearLanguages() {
+      setLanguages([]);
+    }
+
+    // Manual typing handler in the input field
+    function onLanguageInputManual(val) {
+      renderLanguageTagsAndPills();
+    }
+
+    // Render interactive tag chips and toggle pill active state
+    function renderLanguageTagsAndPills() {
+      const current = getCurrentLanguages();
+      const tagsContainer = document.getElementById('selected-lang-tags');
+      if (tagsContainer) {
+        tagsContainer.innerHTML = current.map(l => `
+          <span class="lang-tag">
+            <span>${l}</span>
+            <span class="lang-tag-remove" onclick="removeLanguageTag('${l.replace(/'/g, "\\'")}')" title="Remove">&times;</span>
+          </span>
+        `).join('');
+      }
+
+      document.querySelectorAll('.lang-pill').forEach(pill => {
+        const pillText = pill.textContent.replace(/^[+✓]\s*/, '').trim();
+        const isActive = current.some(l => l.toLowerCase() === pillText.toLowerCase());
+        pill.classList.toggle('active', isActive);
+        pill.textContent = isActive ? `✓ ${pillText}` : `+ ${pillText}`;
+      });
     }
 
     // Provision Agent Submit
@@ -1453,11 +1605,7 @@
       const category = document.getElementById('agent-category').value;
       const rate = document.getElementById('agent-rate').value;
       const password = document.getElementById('agent-password').value;
-      let languages = document.getElementById('agent-languages').value.trim();
-      if (languages === 'CUSTOM') {
-        const customVal = document.getElementById('agent-languages-custom').value.trim();
-        languages = customVal || 'English';
-      }
+      const languages = document.getElementById('agent-languages').value.trim() || 'English';
       const bio = document.getElementById('agent-bio').value.trim();
       const isAvailable = document.getElementById('agent-available').checked;
       const msgBox = document.getElementById('create-agent-msg');
@@ -1488,6 +1636,7 @@
           msgBox.textContent = `✅ Successfully created Agent '${name}' (${username})!`;
           showToast(`Agent '${username}' created successfully!`);
           document.getElementById('agent-provision-form').reset();
+          renderLanguageTagsAndPills();
           setTimeout(() => { switchTab('users', document.querySelectorAll('.nav-btn')[2]); }, 1200);
         } else {
           msgBox.style.color = '#f87171';
@@ -1656,6 +1805,12 @@
       e.preventDefault();
       showToast('✅ Global platform settings saved successfully!');
     }
+
+    // Initialize multi-language chips and pills on page load
+    document.addEventListener('DOMContentLoaded', () => {
+      renderLanguageTagsAndPills();
+    });
+    renderLanguageTagsAndPills();
   </script>
 </body>
 </html>

@@ -62,7 +62,30 @@ def admin_panel_view(request: HttpRequest) -> HttpResponse:
     wallet_transactions = WalletTransaction.objects.select_related('wallet__user').order_by('-created_at')[:60]
     agent_earnings = AgentEarning.objects.select_related('agent').order_by('-created_at')[:60]
 
+    # Gabby Talk Logo handling
+    import os, shutil, base64
+    from django.conf import settings
+    src_logo = r"C:\Users\SONA\.gemini\antigravity-ide\brain\2545965a-d412-4e3f-a386-e4674baed1ac\.user_uploaded\media_1788946290772.jpg"
+    dst_dir = os.path.join(settings.BASE_DIR, 'static', 'images')
+    dst_logo = os.path.join(dst_dir, 'gabby_talk_logo.jpg')
+    app_logo_data = ""
+    try:
+        os.makedirs(dst_dir, exist_ok=True)
+        if os.path.exists(src_logo):
+            if not os.path.exists(dst_logo):
+                shutil.copy(src_logo, dst_logo)
+            with open(src_logo, 'rb') as f:
+                app_logo_data = f"data:image/jpeg;base64,{base64.b64encode(f.read()).decode('utf-8')}"
+        elif os.path.exists(dst_logo):
+            with open(dst_logo, 'rb') as f:
+                app_logo_data = f"data:image/jpeg;base64,{base64.b64encode(f.read()).decode('utf-8')}"
+    except Exception:
+        pass
+
     context = {
+        'app_name': 'Gabby Talk',
+        'app_tagline': 'Real People • Meaningful Conversations',
+        'app_logo_url': app_logo_data or '/static/images/gabby_talk_logo.jpg',
         'callers_count': callers_count,
         'listeners_count': listeners_count,
         'active_listeners_count': active_listeners_count,

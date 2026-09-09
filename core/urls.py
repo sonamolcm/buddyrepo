@@ -54,6 +54,7 @@ from .views import (  # type: ignore
     WebSendOTPView,
     WebVerifyOTPView,
     WebAboutYouView,
+    WebInterestsView,
     WebLoginView,
     # Admin Listener Management APIs
     AdminCreateListenerView,
@@ -105,6 +106,7 @@ urlpatterns = [
     path('auth/send-otp/', WebSendOTPView.as_view(), name='web-send-otp'),
     path('auth/verify-otp/', WebVerifyOTPView.as_view(), name='web-verify-otp'),
     path('auth/about-you/', WebAboutYouView.as_view(), name='web-about-you'),
+    path('auth/interests/', WebInterestsView.as_view(), name='web-interests'),
     path('auth/login/', WebLoginView.as_view(), name='web-login'),
 
     # ==========================================

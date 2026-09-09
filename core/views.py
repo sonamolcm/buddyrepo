@@ -47,10 +47,12 @@ from .otp_service import (  # type: ignore
     create_and_send_otp,
     verify_stored_otp,
     validate_verification_token,
-    generate_verification_token
+    generate_verification_token,
+    decode_verification_token_payload
 )
 # pyrefly: ignore [missing-import]
 from .serializers import (  # type: ignore
+    normalize_interests,
     CallerSignupSendOTPSerializer,
     CallerSignupVerifyOTPSerializer,
     CallerSignupCompleteProfileSerializer,
@@ -185,6 +187,11 @@ class CallerSignupVerifyOTPView(APIView):
                     "message": message
                 }, status=status.HTTP_400_BAD_REQUEST)
 
+            # Preserve any interests passed in Step 2 into the verification token
+            raw_interests = request.data.get('interests') or request.data.get('interest')
+            if raw_interests and token:
+                token = generate_verification_token(phone_number, 'SIGNUP', extra_data={'interests': normalize_interests(raw_interests)})
+
             return Response({
                 "success": True,
                 "message": "Phone number verified successfully. Please complete your profile.",
@@ -234,28 +241,61 @@ class CallerSignupCompleteProfileView(APIView):
 
         phone_number = verified_phone
 
-        # Database safety check against race conditions
-        if User.objects.filter(phone_number=phone_number).exists():
+        name = serializer.validated_data['name'].strip()
+        age = serializer.validated_data['age']
+        gender = serializer.validated_data['gender']
+        language = serializer.validated_data.get('language', 'English')
+
+        # Robust multi-source interest extraction
+        interests = serializer.validated_data.get('interests') or []
+        if not interests:
+            raw_req = (
+                request.data.get('interests') or 
+                request.data.get('interest') or 
+                request.data.get('user_interests') or 
+                request.data.get('caller_interests')
+            )
+            if raw_req:
+                interests = normalize_interests(raw_req)
+
+        # Fallback to interests stored in verification token from previous step
+        if not interests and token:
+            token_payload = decode_verification_token_payload(token)
+            token_interests = token_payload.get('interests') or token_payload.get('interest')
+            if token_interests:
+                interests = normalize_interests(token_interests)
+
+        # Fallback to existing caller profile if already created in earlier step
+        if not interests:
+            existing_prof = CallerProfile.objects.filter(user__phone_number=phone_number).first()
+            if existing_prof and existing_prof.interests:
+                interests = existing_prof.interests
+
+        # Check if user already exists
+        existing_user = User.objects.filter(phone_number=phone_number).first()
+        if existing_user and existing_user.is_profile_completed:
             return Response({
                 "success": False,
                 "message": "Phone number is already registered. Please choose another number."
             }, status=status.HTTP_409_CONFLICT)
 
-        name = serializer.validated_data['name'].strip()
-        age = serializer.validated_data['age']
-        gender = serializer.validated_data['gender']
-        language = serializer.validated_data.get('language', 'English')
-        interests = serializer.validated_data.get('interests', [])
-
         with transaction.atomic():
-            user = User.objects.create_user(
-                username=phone_number,
-                phone_number=phone_number,
-                role='CALLER',
-                first_name=name,
-                is_verified=True,
-                is_profile_completed=True
-            )
+            if existing_user:
+                user = existing_user
+                user.first_name = name
+                user.role = 'CALLER'
+                user.is_verified = True
+                user.is_profile_completed = True
+                user.save()
+            else:
+                user = User.objects.create_user(
+                    username=phone_number,
+                    phone_number=phone_number,
+                    role='CALLER',
+                    first_name=name,
+                    is_verified=True,
+                    is_profile_completed=True
+                )
             caller_profile, _ = CallerProfile.objects.get_or_create(
                 user=user,
                 defaults={
@@ -292,6 +332,7 @@ class CallerSignupCompleteProfileView(APIView):
                     "interests": caller_profile.interests,
                     "created_at": user.created_at.isoformat() if hasattr(user, 'created_at') and user.created_at else None,
                 },
+                "interests": caller_profile.interests,
                 "tokens": {
                     "access": str(refresh.access_token),
                     "refresh": str(refresh)
@@ -2765,6 +2806,44 @@ class InterestListView(APIView):
             "data": interests
         }, status=status.HTTP_200_OK)
 
+    def post(self, request):
+        """
+        Allows setting or updating caller interests:
+        POST /api/interests/
+        Body: {"interests": ["Music", "Movies"]} or {"interest": "Music, Movies"}
+        """
+        raw = request.data.get('interests') or request.data.get('interest') or request.data
+        interests = normalize_interests(raw)
+
+        target_user = request.user if getattr(request, 'user', None) and request.user.is_authenticated else None
+        if not target_user:
+            ident = (
+                request.data.get('phone_number') or 
+                request.data.get('phone') or 
+                request.data.get('username') or 
+                request.data.get('user_id') or
+                request.query_params.get('phone_number') or
+                request.query_params.get('phone')
+            )
+            if ident:
+                target_user = User.objects.filter(phone_number=ident).first() or User.objects.filter(username=ident).first()
+
+        if target_user:
+            cp, _ = CallerProfile.objects.get_or_create(user=target_user)
+            cp.interests = interests
+            cp.save(update_fields=['interests'])
+            return Response({
+                "success": True,
+                "message": "Interests updated successfully.",
+                "interests": cp.interests
+            }, status=status.HTTP_200_OK)
+
+        return Response({
+            "success": True,
+            "message": "Interests parsed successfully.",
+            "interests": interests
+        }, status=status.HTTP_200_OK)
+
 
 
 
@@ -3453,12 +3532,38 @@ class WebAboutYouView(APIView):
             caller_profile.age = int(age)
         if gender:
             caller_profile.gender = gender
+        raw_interests = request.data.get('interests') or request.data.get('interest')
+        if raw_interests:
+            caller_profile.interests = normalize_interests(raw_interests)
         caller_profile.save()
 
         return Response({
             'success': True,
             'message': 'Profile details updated',
-            'next_step': 'INTERESTS'
+            'next_step': 'INTERESTS',
+            'interests': caller_profile.interests
+        }, status=status.HTTP_200_OK)
+
+
+class WebInterestsView(APIView):
+    """
+    Saves profile interests from simulator step 4 (/api/auth/interests/).
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        raw_interests = request.data.get('interests') or request.data.get('interest') or request.data
+        interests = normalize_interests(raw_interests)
+        caller_profile, _ = CallerProfile.objects.get_or_create(user=request.user)
+        if interests:
+            caller_profile.interests = interests
+            caller_profile.save(update_fields=['interests'])
+
+        return Response({
+            'success': True,
+            'message': 'Interests updated successfully',
+            'next_step': 'HOME',
+            'interests': caller_profile.interests
         }, status=status.HTTP_200_OK)
 
 
