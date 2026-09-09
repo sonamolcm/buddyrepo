@@ -637,7 +637,7 @@
         <div class="card" style="cursor: pointer;" onclick="switchTab('create_agent', document.querySelectorAll('.nav-btn')[4])">
           <div style="font-size: 24px; margin-bottom: 10px;">➕</div>
           <h3 style="font-size: 16px; margin-bottom: 6px;">Provision New Agent</h3>
-          <p style="font-size: 12.5px; color: var(--text-muted);">Create verified Doctor / Listener profiles with custom rate/sec and category assignment.</p>
+          <p style="font-size: 12.5px; color: var(--text-muted);">Create verified Agent and Professional Listener profiles with custom rate/sec and category assignment.</p>
         </div>
 
         <div class="card" style="cursor: pointer;" onclick="switchTab('withdrawals', document.querySelectorAll('.nav-btn')[6])">
@@ -665,7 +665,7 @@
               <tr>
                 <th>Call ID</th>
                 <th>Caller</th>
-                <th>Agent / Doctor</th>
+                <th>Agent / Receiver</th>
                 <th>Status</th>
                 <th>Duration</th>
                 <th>Coins</th>
@@ -945,7 +945,7 @@
       <div class="card" style="max-width: 800px; margin: 0 auto;">
         <div class="card-header">
           <div>
-            <h2>➕ Provision New Agent / Doctor</h2>
+            <h2>➕ Provision New Agent</h2>
             <p style="font-size: 12.5px; color: var(--text-muted); margin-top: 3px;">Create and verify a professional listener account for calls</p>
           </div>
         </div>
@@ -954,11 +954,11 @@
           <div class="grid-2">
             <div class="form-group">
               <label class="form-label">Username / Agent ID *</label>
-              <input type="text" id="agent-username" class="form-input" placeholder="e.g. dr_arun_kumar" required>
+              <input type="text" id="agent-username" class="form-input" placeholder="e.g. agent_arun" required>
             </div>
             <div class="form-group">
               <label class="form-label">Full Name *</label>
-              <input type="text" id="agent-fullname" class="form-input" placeholder="e.g. Dr. Arun Kumar" required>
+              <input type="text" id="agent-fullname" class="form-input" placeholder="e.g. Arun Kumar" required>
             </div>
           </div>
 
@@ -968,7 +968,7 @@
               <select id="agent-category" class="form-input" required>
                 <option value="">Select Category...</option>
                 {% for c in categories %}
-                <option value="{{ c.name }}" {% if c.name == 'Doctor' %}selected{% endif %}>{{ c.name }}</option>
+                <option value="{{ c.name }}">{{ c.name }}</option>
                 {% endfor %}
               </select>
             </div>
@@ -995,7 +995,7 @@
 
           <div class="form-group">
             <label class="form-label">Professional Bio / Specialty Summary</label>
-            <textarea id="agent-bio" class="form-input" rows="3" placeholder="Clinical experience, specialties, counseling background..."></textarea>
+            <textarea id="agent-bio" class="form-input" rows="3" placeholder="Professional background, expertise, counseling/service summary..."></textarea>
           </div>
 
           <div class="form-group" style="display: flex; align-items: center; gap: 8px; margin-top: 8px;">
@@ -1322,7 +1322,7 @@
         'calls': ['Calls', 'Full history of connected calls, duration, and coin billing'],
         'users': ['Users', 'Manage Callers, Agents, and Administrators'],
         'offers': ['Offers', 'Configure promotional banners, extra coin percentages, and caller incentives'],
-        'create_agent': ['Create Agent', 'Provision verified Doctor and Listener accounts with custom rates'],
+        'create_agent': ['Create Agent', 'Provision verified Agent and Professional Listener accounts with custom rates'],
         'task_settings': ['Task Settings', 'Configure duty targets, minimum hours, and milestone bonus triggers'],
         'withdrawals': ['Withdrawals', 'Approve or reject agent coin payout requests to UPI / Bank accounts'],
         'transactions': ['Transactions', 'Audit log of caller coin purchases, call deductions, and agent earnings'],
