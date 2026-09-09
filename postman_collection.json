@@ -1,0 +1,419 @@
+{
+  "info": {
+    "_postman_id": "gabby-talk-admin-collection-v1",
+    "name": "Gabby Talk - Admin & Backend API Collection",
+    "description": "Comprehensive Postman collection for Gabby Talk Admin Panel and backend services, including Agent provisioning, user management, withdrawals, call tracking, and metadata.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "https://sonamolcm.pythonanywhere.com",
+      "type": "string"
+    },
+    {
+      "key": "authToken",
+      "value": "",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "1. Admin & Dashboard",
+      "item": [
+        {
+          "name": "Get Admin Panel HTML",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/panel/",
+              "host": ["{{baseUrl}}"],
+              "path": ["panel", ""]
+            },
+            "description": "Fetches the full web Admin Dashboard."
+          },
+          "response": []
+        },
+        {
+          "name": "Get Live Dashboard Stats & Data (Real-time Sync)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/admin/live-data/",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "admin", "live-data", ""]
+            },
+            "description": "Returns real-time counts, calls, users, payouts, and coin balances as JSON."
+          },
+          "response": []
+        },
+        {
+          "name": "Toggle User Status (Block / Unblock)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/admin/users/1/toggle/",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "admin", "users", "1", "toggle", ""]
+            },
+            "description": "Toggles active/blocked status for a given user ID."
+          },
+          "response": []
+        },
+        {
+          "name": "Approve / Reject Withdrawal Payout",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"action\": \"approve\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/admin/withdrawals/1/action/",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "admin", "withdrawals", "1", "action", ""]
+            },
+            "description": "Approve or reject an agent coin withdrawal request (action: 'approve' or 'reject')."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "2. Agent & Listener Management",
+      "item": [
+        {
+          "name": "Provision New Agent (Admin)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"agent_arun\",\n  \"name\": \"Arun Kumar\",\n  \"category\": \"Counselor\",\n  \"password\": \"AgentPass123!\",\n  \"language\": \"English, Malayalam, Hindi\",\n  \"bio\": \"Certified emotional well-being counselor\",\n  \"rate_per_second\": 5,\n  \"is_available\": true\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/listeners/",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "listeners", ""]
+            },
+            "description": "Creates and verifies an Agent account with language list, category, and rate."
+          },
+          "response": []
+        },
+        {
+          "name": "List All Agents / Listeners",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/listeners/",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "listeners", ""]
+            },
+            "description": "Returns list of all registered Agents and professional listeners."
+          },
+          "response": []
+        },
+        {
+          "name": "Delete Agent",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/listeners/1/delete/",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "listeners", "1", "delete", ""]
+            },
+            "description": "Deletes an agent profile by user ID."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "3. User & Caller Management",
+      "item": [
+        {
+          "name": "List All Callers / Users",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/callers/",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "callers", ""]
+            },
+            "description": "Retrieves registered callers with profile details."
+          },
+          "response": []
+        },
+        {
+          "name": "Delete Caller Account",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/callers/1/delete/",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "callers", "1", "delete", ""]
+            },
+            "description": "Permanently deletes a caller account."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "4. Authentication & Signup",
+      "item": [
+        {
+          "name": "Agent / Admin Login",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"agent_arun\",\n  \"password\": \"AgentPass123!\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/login/",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "login", ""]
+            },
+            "description": "Authenticates Agent/Admin and returns JWT tokens."
+          },
+          "response": []
+        },
+        {
+          "name": "Caller Signup Step 1: Send OTP",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"phone_number\": \"+919876543210\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/caller/signup/send-otp/",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "auth", "caller", "signup", "send-otp", ""]
+            },
+            "description": "Sends verification OTP to caller phone number."
+          },
+          "response": []
+        },
+        {
+          "name": "Caller Signup Step 2: Verify OTP",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"phone_number\": \"+919876543210\",\n  \"otp\": \"123456\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/caller/signup/verify-otp/",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "auth", "caller", "signup", "verify-otp", ""]
+            },
+            "description": "Verifies OTP and returns verification token."
+          },
+          "response": []
+        },
+        {
+          "name": "Caller Signup Step 3: Complete Profile",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"verification_token\": \"<TOKEN_FROM_STEP_2>\",\n  \"name\": \"Sona\",\n  \"age\": 24,\n  \"gender\": \"FEMALE\",\n  \"language\": \"English, Malayalam\",\n  \"interests\": [\"Music\", \"Gaming\", \"Travel\"]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/caller/signup/complete-profile/",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "auth", "caller", "signup", "complete-profile", ""]
+            },
+            "description": "Completes caller registration, saving profile and interests."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "5. Metadata & Configuration",
+      "item": [
+        {
+          "name": "List World Languages",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/languages/",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "languages", ""]
+            },
+            "description": "Returns standard list of world languages with native translations."
+          },
+          "response": []
+        },
+        {
+          "name": "List Available Interests",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/interests/",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "interests", ""]
+            },
+            "description": "Returns available interests with emoji icons for user profiles."
+          },
+          "response": []
+        },
+        {
+          "name": "List Categories",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/categories/",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "categories", ""]
+            },
+            "description": "Returns active categories and professions."
+          },
+          "response": []
+        },
+        {
+          "name": "Create Category",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Life Coach\",\n  \"description\": \"Personal life and motivation coaching\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/categories/",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "categories", ""]
+            },
+            "description": "Creates a new category for agents."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "6. Calls & Wallet",
+      "item": [
+        {
+          "name": "List All Calls",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/calls/",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "calls", ""]
+            },
+            "description": "Returns call history and real-time call states."
+          },
+          "response": []
+        },
+        {
+          "name": "Add / Recharge Coins",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"phone_number\": \"+919876543210\",\n  \"coins\": 100\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/coins/add/",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "coins", "add", ""]
+            },
+            "description": "Credits coins to user wallet and records a transaction."
+          },
+          "response": []
+        },
+        {
+          "name": "List Agent Payout Requests",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/agent/payouts/",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "agent", "payouts", ""]
+            },
+            "description": "Lists all agent coin withdrawal requests."
+          },
+          "response": []
+        }
+      ]
+    }
+  ]
+}

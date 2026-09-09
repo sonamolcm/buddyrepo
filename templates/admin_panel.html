@@ -757,6 +757,15 @@
         <h1 id="page-title-text">Dashboard</h1>
         <p id="page-subtitle-text">Platform overview, live metrics, and real-time statistics</p>
       </div>
+      <div class="header-actions" style="display: flex; align-items: center; gap: 10px;">
+        <div style="background: #ffffff; border: 2px solid #18181b; box-shadow: 2px 2px 0px #18181b; padding: 6px 14px; border-radius: 999px; font-size: 11.5px; font-weight: 800; color: #18181b; display: flex; align-items: center; gap: 7px;">
+          <span id="live-indicator-dot" style="width: 8px; height: 8px; border-radius: 50%; background: #16a34a; display: inline-block;"></span>
+          <span id="live-indicator-text">Live Sync (Auto 4s)</span>
+        </div>
+        <button type="button" class="btn btn-dark btn-sm" onclick="fetchLiveAdminData(true)" title="Fetch latest data immediately">
+          <span id="sync-spinner-icon">🔄</span> Refresh
+        </button>
+      </div>
     </div>
 
     <!-- ========================================== -->
@@ -769,7 +778,7 @@
             <span class="stat-title">Total Calls</span>
             <div class="stat-icon icon-blue">📞</div>
           </div>
-          <div class="stat-value">{{ calls_count|default:"0" }}</div>
+          <div class="stat-value" id="stat-calls-count">{{ calls_count|default:"0" }}</div>
           <div class="stat-desc">Connected audio & video calls</div>
         </div>
 
@@ -778,8 +787,8 @@
             <span class="stat-title">Active Users</span>
             <div class="stat-icon icon-purple">👥</div>
           </div>
-          <div class="stat-value">{{ all_users|length|default:"0" }}</div>
-          <div class="stat-desc">{{ callers_count }} Callers • {{ listeners_count }} Agents</div>
+          <div class="stat-value" id="stat-users-count">{{ all_users|length|default:"0" }}</div>
+          <div class="stat-desc" id="stat-users-desc">{{ callers_count }} Callers • {{ listeners_count }} Agents</div>
         </div>
 
         <div class="stat-card">
@@ -787,7 +796,7 @@
             <span class="stat-title">Available Agents</span>
             <div class="stat-icon icon-emerald">🎧</div>
           </div>
-          <div class="stat-value">{{ active_listeners_count|default:"0" }}</div>
+          <div class="stat-value" id="stat-active-listeners-count">{{ active_listeners_count|default:"0" }}</div>
           <div class="stat-desc">Ready for incoming calls right now</div>
         </div>
 
@@ -796,7 +805,7 @@
             <span class="stat-title">Pending Withdrawals</span>
             <div class="stat-icon icon-amber">💸</div>
           </div>
-          <div class="stat-value">{{ pending_withdrawals_count|default:"0" }}</div>
+          <div class="stat-value" id="stat-pending-withdrawals-count">{{ pending_withdrawals_count|default:"0" }}</div>
           <div class="stat-desc">Awaiting payout approval</div>
         </div>
 
@@ -805,7 +814,7 @@
             <span class="stat-title">Wallet Circulation</span>
             <div class="stat-icon icon-pink">🪙</div>
           </div>
-          <div class="stat-value">{{ total_coins|default:"0" }}</div>
+          <div class="stat-value" id="stat-total-coins">{{ total_coins|default:"0" }}</div>
           <div class="stat-desc">Coins in user & agent balances</div>
         </div>
       </div>
@@ -850,7 +859,7 @@
                 <th>Timestamp</th>
               </tr>
             </thead>
-            <tbody>
+            <tbody id="recent-calls-preview-tbody">
               {% for c in recent_calls|slice:":6" %}
               <tr>
                 <td>#{{ c.id }}</td>
@@ -1862,9 +1871,101 @@
       showToast('✅ Global platform settings saved successfully!');
     }
 
+    // Live Data Synchronization (Auto-polls every 4 seconds)
+    let lastStatsSnapshot = null;
+
+    async function fetchLiveAdminData(isManual = false) {
+      const spinner = document.getElementById('sync-spinner-icon');
+      const dot = document.getElementById('live-indicator-dot');
+      if (spinner && isManual) {
+        spinner.style.transform = 'rotate(360deg)';
+        spinner.style.transition = 'transform 0.5s ease';
+        setTimeout(() => { spinner.style.transform = ''; spinner.style.transition = ''; }, 500);
+      }
+
+      try {
+        const res = await fetch('/api/admin/live-data/', { cache: 'no-store' });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!data.success || !data.stats) return;
+
+        const s = data.stats;
+
+        function updateStat(elId, newVal) {
+          const el = document.getElementById(elId);
+          if (el && el.textContent.trim() != String(newVal)) {
+            el.textContent = newVal;
+            el.style.transition = 'all 0.3s ease';
+            el.style.transform = 'scale(1.1)';
+            setTimeout(() => { el.style.transform = 'scale(1)'; }, 350);
+          }
+        }
+
+        updateStat('stat-calls-count', s.calls_count);
+        updateStat('stat-users-count', s.all_users_count);
+        updateStat('stat-active-listeners-count', s.active_listeners_count);
+        updateStat('stat-pending-withdrawals-count', s.pending_withdrawals_count);
+        updateStat('stat-total-coins', s.total_coins);
+
+        const desc = document.getElementById('stat-users-desc');
+        if (desc) {
+          desc.textContent = `${s.callers_count} Callers • ${s.listeners_count} Agents`;
+        }
+
+        // Notify if new activity occurred since last check
+        if (lastStatsSnapshot) {
+          if (s.calls_count > lastStatsSnapshot.calls_count) {
+            showToast(`📞 New Call recorded! Total calls: ${s.calls_count}`);
+          }
+          if (s.all_users_count > lastStatsSnapshot.all_users_count) {
+            showToast(`👤 New User account detected! Total users: ${s.all_users_count}`);
+          }
+          if (s.pending_withdrawals_count > lastStatsSnapshot.pending_withdrawals_count) {
+            showToast(`💸 New Withdrawal request received!`);
+          }
+        }
+        lastStatsSnapshot = s;
+
+        // Dynamically update dashboard recent calls preview
+        if (data.recent_calls && data.recent_calls.length > 0) {
+          const previewBody = document.getElementById('recent-calls-preview-tbody');
+          if (previewBody) {
+            let html = '';
+            data.recent_calls.slice(0, 6).forEach(c => {
+              let badge = `<span class="badge badge-warning">${c.status}</span>`;
+              if (c.status === 'COMPLETED') badge = `<span class="badge badge-success">Completed</span>`;
+              else if (c.status === 'ONGOING') badge = `<span class="badge badge-primary">Ongoing</span>`;
+
+              html += `<tr>
+                <td>#${c.id}</td>
+                <td><strong>${c.caller}</strong></td>
+                <td>${c.receiver}</td>
+                <td>${badge}</td>
+                <td>${c.duration}</td>
+                <td>🪙 ${c.coins}</td>
+                <td style="color: var(--text-muted);">${c.timestamp}</td>
+              </tr>`;
+            });
+            previewBody.innerHTML = html;
+          }
+        }
+
+        if (dot) dot.style.background = '#16a34a';
+        if (isManual) showToast('✅ Dashboard updated with latest data!');
+      } catch (err) {
+        if (dot) dot.style.background = '#eab308';
+      }
+    }
+
+    // Auto-poll live data every 4 seconds
+    setInterval(() => {
+      fetchLiveAdminData(false);
+    }, 4000);
+
     // Initialize multi-language chips and pills on page load
     document.addEventListener('DOMContentLoaded', () => {
       renderLanguageTagsAndPills();
+      fetchLiveAdminData(false);
     });
     renderLanguageTagsAndPills();
   </script>

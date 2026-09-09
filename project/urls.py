@@ -81,13 +81,17 @@ from core.views import (
     AgentRatingView,
     AgentRecentSessionsView,
 )
-from core.caller_views import app_home_view, admin_panel_view
+from core.caller_views import app_home_view, admin_panel_view, admin_live_data_api
 
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('panel/', admin_panel_view, name='admin-panel'),
     path('admin-panel/', admin_panel_view, name='admin-panel-alias'),
     path('dashboard/', admin_panel_view, name='admin-dashboard'),
+    path('api/admin/live-data/', admin_live_data_api, name='admin-live-data'),
+    path('api/admin/live-data', admin_live_data_api),
+    path('admin/live-data/', admin_live_data_api),
+    path('admin/live-data', admin_live_data_api),
     path('', app_home_view, name='app-home'),
     path('app/', app_home_view, name='app-simulator'),
     path('simulator/', app_home_view, name='app-simulator-alias'),
