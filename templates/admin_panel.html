@@ -492,7 +492,7 @@
   <aside class="sidebar">
     <div class="brand">
       <div class="brand-icon">🫂</div>
-      <div class="brand-text">BUDDY <span class="brand-badge">ADMIN</span></div>
+      <div class="brand-text">BUDDY</div>
     </div>
 
     <ul class="nav-list">
@@ -507,7 +507,6 @@
       <li>
         <button class="nav-btn" onclick="switchTab('calls', this)">
           <span>📞</span> Calls
-          <span class="nav-badge">{{ calls_count }}</span>
         </button>
       </li>
 
@@ -515,7 +514,6 @@
       <li>
         <button class="nav-btn" onclick="switchTab('users', this)">
           <span>👥</span> Users
-          <span class="nav-badge">{{ all_users|length }}</span>
         </button>
       </li>
 
@@ -523,7 +521,6 @@
       <li>
         <button class="nav-btn" onclick="switchTab('offers', this)">
           <span>🎁</span> Offers
-          <span class="nav-badge" id="nav-offers-count">4</span>
         </button>
       </li>
 
@@ -545,9 +542,6 @@
       <li>
         <button class="nav-btn" onclick="switchTab('withdrawals', this)">
           <span>💸</span> Withdrawals
-          {% if pending_withdrawals_count %}
-          <span class="nav-badge" style="background: rgba(245, 158, 11, 0.3); color: #fbbf24;">{{ pending_withdrawals_count }}</span>
-          {% endif %}
         </button>
       </li>
 
