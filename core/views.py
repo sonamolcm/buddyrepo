@@ -5377,6 +5377,94 @@ class AgentRecentSessionsView(APIView):
         }, status=status.HTTP_200_OK)
 
 
+# ===================================================
+# ADMIN PANEL LIVE ACTIONS
+# ===================================================
+class AdminPayoutActionView(APIView):
+    """
+    POST /api/admin/withdrawals/<payout_id>/action/
+    Admin endpoint to approve, complete, or reject a withdrawal request.
+    If rejected, atomically refunds coins back to the Agent's wallet.
+    """
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request, payout_id):
+        payout = AgentPayout.objects.filter(id=payout_id).first()
+        if not payout:
+            return Response({"success": False, "message": f"Withdrawal request #{payout_id} not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        action = (request.data.get('action') or '').strip().lower()
+        note = (request.data.get('note') or '').strip()
+
+        with transaction.atomic():
+            if action in ('approve', 'approved'):
+                payout.status = 'APPROVED'
+                payout.processed_at = timezone.now()
+                if note:
+                    payout.notes = note
+                payout.save(update_fields=['status', 'processed_at', 'notes'])
+                msg = f"Withdrawal #{payout_id} for '{payout.agent.username}' approved."
+
+            elif action in ('complete', 'completed'):
+                payout.status = 'COMPLETED'
+                payout.processed_at = timezone.now()
+                if note:
+                    payout.notes = note
+                payout.save(update_fields=['status', 'processed_at', 'notes'])
+                msg = f"Withdrawal #{payout_id} for '{payout.agent.username}' marked as completed."
+
+            elif action in ('reject', 'rejected'):
+                if payout.status != 'REJECTED':
+                    # Refund coins back to agent wallet
+                    aw, _ = AgentWallet.objects.select_for_update().get_or_create(agent=payout.agent)
+                    aw.balance += payout.coins
+                    aw.total_paid_out = max(0, aw.total_paid_out - payout.coins)
+                    aw.save(update_fields=['balance', 'total_paid_out', 'updated_at'])
+
+                    payout.status = 'REJECTED'
+                    payout.processed_at = timezone.now()
+                    if note:
+                        payout.notes = note
+                    payout.save(update_fields=['status', 'processed_at', 'notes'])
+                msg = f"Withdrawal #{payout_id} rejected and {payout.coins} coins refunded to agent."
+
+            else:
+                return Response({
+                    "success": False,
+                    "message": "Invalid action. Allowed: 'approve', 'complete', 'reject'."
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+        return Response({
+            "success": True,
+            "message": msg,
+            "status": payout.status
+        }, status=status.HTTP_200_OK)
+
+
+class AdminUserToggleStatusView(APIView):
+    """
+    POST /api/admin/users/<user_id>/toggle/
+    Toggles is_active on user account (block / unblock).
+    """
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request, user_id):
+        user = User.objects.filter(id=user_id).first()
+        if not user:
+            return Response({"success": False, "message": f"User #{user_id} not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        user.is_active = not user.is_active
+        user.save(update_fields=['is_active'])
+        status_str = "activated" if user.is_active else "blocked / deactivated"
+
+        return Response({
+            "success": True,
+            "message": f"User '{user.username}' {status_str}.",
+            "is_active": user.is_active
+        }, status=status.HTTP_200_OK)
+
+
+
 
 
 

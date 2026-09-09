@@ -87,9 +87,18 @@ from .views import (  # type: ignore
     AgentPayoutView,
     AgentRatingView,
     AgentRecentSessionsView,
+    # Live Admin Actions
+    AdminPayoutActionView,
+    AdminUserToggleStatusView,
 )
 
 urlpatterns = [
+    # Admin Live Action Routes
+    path('admin/withdrawals/<int:payout_id>/action/', AdminPayoutActionView.as_view(), name='admin-payout-action'),
+    path('admin/withdrawals/<int:payout_id>/action', AdminPayoutActionView.as_view()),
+    path('admin/users/<int:user_id>/toggle/', AdminUserToggleStatusView.as_view(), name='admin-user-toggle'),
+    path('admin/users/<int:user_id>/toggle', AdminUserToggleStatusView.as_view()),
+
     # ==========================================
     # 0. WEB SIMULATOR & COMPATIBILITY ROUTES
     # ==========================================
