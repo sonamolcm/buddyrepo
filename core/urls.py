@@ -29,6 +29,8 @@ from .views import (  # type: ignore
     WalletView,
     GetCoinsView,
     AddCoinsView,
+    CoinPurchaseHistoryView,
+    CoinTransactionHistoryView,
     CallRequestView,
     IncomingCallsView,
     AcceptCallView,
@@ -236,6 +238,20 @@ urlpatterns = [
     path('add-coins', AddCoinsView.as_view()),
     path('addcoins/', AddCoinsView.as_view()),
     path('addcoins', AddCoinsView.as_view()),
+
+    # Coin Purchase & Transaction History
+    path('coins/history/', CoinPurchaseHistoryView.as_view(), name='coin-purchase-history'),
+    path('coins/history', CoinPurchaseHistoryView.as_view()),
+    path('coins/purchase-history/', CoinPurchaseHistoryView.as_view(), name='coin-purchase-history-alias'),
+    path('coins/purchase-history', CoinPurchaseHistoryView.as_view()),
+    path('coins/purchases/', CoinPurchaseHistoryView.as_view(), name='coin-purchases'),
+    path('coins/purchases', CoinPurchaseHistoryView.as_view()),
+    path('coins/purchase/', CoinPurchaseHistoryView.as_view(), name='coin-purchase'),
+    path('coins/purchase', CoinPurchaseHistoryView.as_view()),
+    path('wallet/history/', CoinPurchaseHistoryView.as_view(), name='wallet-history'),
+    path('wallet/history', CoinPurchaseHistoryView.as_view()),
+    path('wallet/transactions/', CoinPurchaseHistoryView.as_view(), name='wallet-transactions'),
+    path('wallet/transactions', CoinPurchaseHistoryView.as_view()),
 
     # ==========================================
     # 5.2 CALL WORKFLOW & HISTORY

@@ -68,6 +68,8 @@ from .serializers import (  # type: ignore
     UserDetailSerializer,
     CategorySerializer,
     WalletSerializer,
+    WalletTransactionSerializer,
+    CoinPurchaseHistorySerializer,
     CallHistorySerializer,
     CallReviewSerializer,
     CallRequestSerializer,
@@ -1478,8 +1480,17 @@ class AddCoinsView(APIView):
         )
 
         return Response({
-            "success": True,
+            "status": True,
             "message": f"{amount} coins added successfully.",
+            "success": True,
+            "data": {
+                "transaction_id": transaction.id,
+                "added_coins": amount,
+                "coins": wallet.balance,
+                "balance": wallet.balance,
+                "user_id": user.id,
+                "phone_number": getattr(user, 'phone_number', '')
+            },
             "added_coins": amount,
             "coins": wallet.balance,
             "balance": wallet.balance,
@@ -1487,6 +1498,171 @@ class AddCoinsView(APIView):
             "phone_number": getattr(user, 'phone_number', ''),
             "transaction_id": transaction.id
         }, status=status.HTTP_200_OK)
+
+
+class CoinPurchaseHistoryView(APIView):
+    """
+    Coin Purchase History API:
+    - GET /api/coins/history/
+    - GET /api/coins/purchase-history/
+    - GET /api/coins/purchases/
+    - GET /api/wallet/history/
+    - GET /api/wallet/transactions/
+
+    Query parameters:
+    - type: 'credit' / 'purchase' (default: purchases only),
+            'debit' (calls/spent only),
+            'all' (all transactions)
+    - page: int (default 1)
+    - page_size: int (default 20)
+    - phone_number / user_id / identifier: optional for user resolution
+
+    - POST /api/coins/history/
+    - POST /api/coins/purchase/
+    Records a coin purchase, credits the user's wallet, and logs the purchase transaction.
+    Payload: {"coins": 100, "price": 99, "payment_id": "pay_123", "order_id": "ord_123", "description": "100 coins"}
+    """
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request, *args, **kwargs):
+        user = _resolve_user_for_wallet(request, **kwargs)
+        if not user:
+            return Response({
+                "status": False,
+                "message": "User not found or authentication required.",
+                "data": None
+            }, status=status.HTTP_404_NOT_FOUND)
+
+        wallet, _ = Wallet.objects.get_or_create(user=user, defaults={'balance': 50})
+
+        filter_type = str(request.query_params.get('type', 'credit')).strip().upper()
+        qs = WalletTransaction.objects.filter(wallet=wallet).order_by('-created_at')
+
+        if filter_type in ('CREDIT', 'PURCHASE', 'PURCHASES', 'COINS'):
+            qs = qs.filter(transaction_type='CREDIT')
+        elif filter_type in ('DEBIT', 'SPENT'):
+            qs = qs.filter(transaction_type='DEBIT')
+        # If 'ALL' or 'BOTH', do not filter by transaction_type
+
+        total_coins_purchased = WalletTransaction.objects.filter(
+            wallet=wallet, transaction_type='CREDIT'
+        ).aggregate(models.Sum('amount'))['amount__sum'] or 0
+
+        total_coins_spent = WalletTransaction.objects.filter(
+            wallet=wallet, transaction_type='DEBIT'
+        ).aggregate(models.Sum('amount'))['amount__sum'] or 0
+
+        total_count = qs.count()
+
+        try:
+            page = max(1, int(request.query_params.get('page', 1)))
+        except (ValueError, TypeError):
+            page = 1
+
+        try:
+            page_size = max(1, min(100, int(request.query_params.get('page_size', 20))))
+        except (ValueError, TypeError):
+            page_size = 20
+
+        start_idx = (page - 1) * page_size
+        end_idx = start_idx + page_size
+        paginated_qs = qs[start_idx:end_idx]
+
+        serializer = WalletTransactionSerializer(paginated_qs, many=True)
+
+        return Response({
+            "status": True,
+            "message": "Coin purchase history retrieved successfully.",
+            "data": {
+                "user_id": user.id,
+                "phone_number": getattr(user, 'phone_number', ''),
+                "current_balance": wallet.balance,
+                "total_coins_purchased": total_coins_purchased,
+                "total_coins_spent": total_coins_spent,
+                "total_purchases": total_count if filter_type in ('CREDIT', 'PURCHASE', 'PURCHASES', 'COINS') else WalletTransaction.objects.filter(wallet=wallet, transaction_type='CREDIT').count(),
+                "total_transactions": total_count,
+                "filter_type": filter_type,
+                "page": page,
+                "page_size": page_size,
+                "purchases": serializer.data,
+                "transactions": serializer.data
+            }
+        }, status=status.HTTP_200_OK)
+
+    def post(self, request, *args, **kwargs):
+        user = _resolve_user_for_wallet(request, **kwargs)
+        if not user:
+            return Response({
+                "status": False,
+                "message": "User not found or authentication required.",
+                "data": None
+            }, status=status.HTTP_404_NOT_FOUND)
+
+        wallet, _ = Wallet.objects.get_or_create(user=user, defaults={'balance': 50})
+
+        raw_amount = (
+            request.data.get('coins') or
+            request.data.get('amount') or
+            request.data.get('coin') or
+            request.data.get('add_coins')
+        )
+        if raw_amount is None:
+            return Response({
+                "status": False,
+                "message": "'coins' or 'amount' field is required. Example: {\"coins\": 100}",
+                "data": None
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            amount = int(raw_amount)
+            if amount <= 0:
+                raise ValueError()
+        except (ValueError, TypeError):
+            return Response({
+                "status": False,
+                "message": "'coins' / 'amount' must be a positive integer greater than 0.",
+                "data": None
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        payment_id = request.data.get('payment_id', '')
+        order_id = request.data.get('order_id', '')
+        price = request.data.get('price') or request.data.get('amount_in_inr') or request.data.get('inr')
+        desc_custom = request.data.get('description', '')
+
+        parts = [desc_custom or f"Purchased {amount} coins"]
+        if payment_id:
+            parts.append(f"Payment ID: {payment_id}")
+        if order_id:
+            parts.append(f"Order ID: {order_id}")
+        if price:
+            parts.append(f"Paid: ₹{price}")
+        description = " | ".join(parts)
+
+        wallet.balance += amount
+        wallet.save()
+
+        transaction = WalletTransaction.objects.create(
+            wallet=wallet,
+            transaction_type='CREDIT',
+            amount=amount,
+            description=description
+        )
+
+        return Response({
+            "status": True,
+            "message": f"{amount} coins purchased successfully.",
+            "data": {
+                "transaction_id": transaction.id,
+                "coins_added": amount,
+                "coins": wallet.balance,
+                "current_balance": wallet.balance,
+                "description": description,
+                "created_at": transaction.created_at.isoformat()
+            }
+        }, status=status.HTTP_201_CREATED)
+
+
+CoinTransactionHistoryView = CoinPurchaseHistoryView
 
 
 def is_agent_available(agent):
@@ -3153,7 +3329,14 @@ class CategoryDetailView(APIView):
         category = self._get_category(ident)
         if not category:
             return Response(
-                {"detail": f"Category '{ident}' not found or is inactive."},
+                {
+                    "status": False,
+                    "message": f"Category '{ident}' not found or is inactive.",
+                    "status_code": status.HTTP_404_NOT_FOUND,
+                    "success": False,
+                    "data": None,
+                    "detail": f"Category '{ident}' not found or is inactive."
+                },
                 status=status.HTTP_404_NOT_FOUND
             )
 
@@ -3168,15 +3351,27 @@ class CategoryDetailView(APIView):
         matches = [serialize_listener_user(u, request) for u in users]
 
         serializer = CategorySerializer(category, context={'request': request})
-        data = dict(serializer.data)
-        data["status"] = True
-        data["status_code"] = status.HTTP_200_OK
-        data["success"] = True
-        data["message"] = f"Category '{category.name}' details and doctors retrieved successfully."
-        data["count"] = len(matches)
-        data["matches_count"] = len(matches)
-        data["matches"] = matches
-        return Response(data, status=status.HTTP_200_OK)
+        category_data = dict(serializer.data)
+        category_data["count"] = len(matches)
+        category_data["matches_count"] = len(matches)
+        category_data["matches"] = matches
+
+        for key in ("status", "status_code", "success", "message"):
+            category_data.pop(key, None)
+
+        msg = (
+            f"Category '{category.name}' details and doctors retrieved successfully."
+            if category.name.lower() in ('doctor', 'doctors')
+            else f"Category '{category.name}' details and {category.name.lower()}s retrieved successfully."
+        )
+
+        return Response({
+            "status": True,
+            "message": msg,
+            "status_code": status.HTTP_200_OK,
+            "success": True,
+            "data": category_data,
+        }, status=status.HTTP_200_OK)
 
     def put(self, request, id=None, identifier=None):
         return self._update(request, id=id, identifier=identifier, partial=False)

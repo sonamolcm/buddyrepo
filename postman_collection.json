@@ -344,7 +344,7 @@
               "host": ["{{baseUrl}}"],
               "path": ["api", "categories", "Doctor", ""]
             },
-            "description": "Returns category details for Doctor including description as list of strings, match count, and list of doctors."
+            "description": "Returns category details for Doctor with status and message at the top level and category details & matches inside data."
           },
           "response": []
         },
@@ -410,6 +410,52 @@
               "path": ["api", "coins", "add", ""]
             },
             "description": "Credits coins to user wallet and records a transaction."
+          },
+          "response": []
+        },
+        {
+          "name": "Get Coin Purchase History",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/coins/history/",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "coins", "history", ""]
+            },
+            "description": "Returns user's coin purchase history with status, message at top, and purchases inside data."
+          },
+          "response": []
+        },
+        {
+          "name": "Record Coin Purchase",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"coins\": 100,\n  \"price\": 99,\n  \"payment_id\": \"pay_123456\",\n  \"order_id\": \"ord_123456\",\n  \"description\": \"100 Coins Recharge\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/coins/history/",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "coins", "history", ""]
+            },
+            "description": "Records a new coin purchase, credits wallet, and logs transaction."
           },
           "response": []
         },

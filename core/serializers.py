@@ -9,6 +9,7 @@ from .models import (
     Category,
     Interest,
     Wallet,
+    WalletTransaction,
     Call,
     CallReview,
     CallerFavorite,
@@ -356,6 +357,31 @@ class WalletSerializer(serializers.ModelSerializer):
     class Meta:
         model = Wallet
         fields = ('balance',)
+
+
+class WalletTransactionSerializer(serializers.ModelSerializer):
+    coins = serializers.IntegerField(source='amount', read_only=True)
+    date = serializers.DateTimeField(source='created_at', format='%Y-%m-%d %H:%M:%S', read_only=True)
+    status = serializers.SerializerMethodField()
+
+    class Meta:
+        model = WalletTransaction
+        fields = (
+            'id',
+            'transaction_type',
+            'amount',
+            'coins',
+            'description',
+            'status',
+            'date',
+            'created_at',
+        )
+
+    def get_status(self, obj):
+        return "SUCCESS"
+
+
+CoinPurchaseHistorySerializer = WalletTransactionSerializer
 
 
 class ListenerProfileSerializer(serializers.ModelSerializer):

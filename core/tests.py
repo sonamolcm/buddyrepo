@@ -424,17 +424,23 @@ class CategoryFilterAndSearchAPITests(TestCase):
         self.assertEqual(doc_item['matches_count'], 2)
         self.assertEqual(len(doc_item['matches']), 2)
 
-        # 2. Choose Doctor category -> shows count & matches list
+        # 2. Choose Doctor category -> shows status, message at top & matches list inside data
         cat_detail_res = self.client.get(f'/api/categories/{doctor_cat.id}/')
         self.assertEqual(cat_detail_res.status_code, status.HTTP_200_OK)
-        self.assertEqual(cat_detail_res.data['name'], "Doctor")
-        self.assertEqual(cat_detail_res.data['count'], 2)
-        self.assertEqual(len(cat_detail_res.data['matches']), 2)
+        self.assertTrue(cat_detail_res.data.get('status'))
+        self.assertIn('message', cat_detail_res.data)
+        cat_data = cat_detail_res.data.get('data', cat_detail_res.data)
+        self.assertEqual(cat_data['name'], "Doctor")
+        self.assertEqual(cat_data['count'], 2)
+        self.assertEqual(len(cat_data['matches']), 2)
 
         # Also works by category name
         by_name_res = self.client.get('/api/categories/Doctor/')
         self.assertEqual(by_name_res.status_code, status.HTTP_200_OK)
-        self.assertEqual(by_name_res.data['count'], 2)
+        self.assertTrue(by_name_res.data.get('status'))
+        self.assertIn('message', by_name_res.data)
+        by_name_data = by_name_res.data.get('data', by_name_res.data)
+        self.assertEqual(by_name_data['count'], 2)
 
         # 3. Select one doctor -> shows full details
         doctor_detail_res = self.client.get('/api/listeners/dr_house/')
@@ -454,5 +460,85 @@ class CategoryFilterAndSearchAPITests(TestCase):
         listener_filter_res = self.client.get('/api/listeners/?category=Doctor')
         self.assertEqual(listener_filter_res.status_code, status.HTTP_200_OK)
         self.assertEqual(listener_filter_res.data['count'], 2)
+
+
+class CoinPurchaseHistoryTests(APITestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="caller_coin_user",
+            password="Pass123!Safe",
+            phone_number="+919988776655",
+            role="CALLER",
+            is_active=True,
+            is_verified=True
+        )
+        self.wallet, _ = Wallet.objects.get_or_create(user=self.user, defaults={'balance': 50})
+
+    def test_get_coin_purchase_history_empty(self):
+        self.client.force_authenticate(user=self.user)
+        res = self.client.get('/api/coins/history/')
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertTrue(res.data.get('status'))
+        self.assertIn('message', res.data)
+        self.assertIn('data', res.data)
+        data = res.data['data']
+        self.assertEqual(data['current_balance'], 50)
+        self.assertEqual(data['total_coins_purchased'], 0)
+        self.assertEqual(len(data['purchases']), 0)
+
+    def test_post_coin_purchase_and_retrieve_history(self):
+        self.client.force_authenticate(user=self.user)
+        # Purchase 100 coins
+        post_res = self.client.post('/api/coins/history/', {
+            'coins': 100,
+            'price': 99,
+            'payment_id': 'pay_test_123',
+            'order_id': 'ord_test_456'
+        }, format='json')
+        self.assertEqual(post_res.status_code, status.HTTP_201_CREATED)
+        self.assertTrue(post_res.data.get('status'))
+        self.assertEqual(post_res.data['data']['coins_added'], 100)
+        self.assertEqual(post_res.data['data']['current_balance'], 150)
+
+        # Retrieve history
+        get_res = self.client.get('/api/coins/history/')
+        self.assertEqual(get_res.status_code, status.HTTP_200_OK)
+        self.assertTrue(get_res.data.get('status'))
+        data = get_res.data['data']
+        self.assertEqual(data['current_balance'], 150)
+        self.assertEqual(data['total_coins_purchased'], 100)
+        self.assertEqual(data['total_purchases'], 1)
+        self.assertEqual(len(data['purchases']), 1)
+        self.assertEqual(data['purchases'][0]['coins'], 100)
+        self.assertEqual(data['purchases'][0]['transaction_type'], 'CREDIT')
+        self.assertEqual(data['purchases'][0]['status'], 'SUCCESS')
+
+    def test_filter_coin_history_types(self):
+        self.client.force_authenticate(user=self.user)
+        # Add credit and debit
+        WalletTransaction.objects.create(
+            wallet=self.wallet,
+            transaction_type='CREDIT',
+            amount=200,
+            description="Recharge 200 coins"
+        )
+        WalletTransaction.objects.create(
+            wallet=self.wallet,
+            transaction_type='DEBIT',
+            amount=30,
+            description="Call deduction"
+        )
+
+        # Default is credit (purchases)
+        res_credit = self.client.get('/api/coins/purchase-history/')
+        self.assertEqual(res_credit.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(res_credit.data['data']['purchases']), 1)
+        self.assertEqual(res_credit.data['data']['purchases'][0]['coins'], 200)
+
+        # All transactions
+        res_all = self.client.get('/api/wallet/transactions/?type=all')
+        self.assertEqual(res_all.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(res_all.data['data']['transactions']), 2)
+
 
 
