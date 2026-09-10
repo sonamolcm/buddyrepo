@@ -541,4 +541,76 @@ class CoinPurchaseHistoryTests(APITestCase):
         self.assertEqual(len(res_all.data['data']['transactions']), 2)
 
 
+class AgoraCallTokenTestCase(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.caller = User.objects.create_user(
+            username='caller_agora',
+            phone_number='+919876543201',
+            role='CALLER'
+        )
+        self.agent = User.objects.create_user(
+            username='agent_agora',
+            phone_number='+919876543202',
+            role='AGENT'
+        )
+        self.other_user = User.objects.create_user(
+            username='other_agora',
+            phone_number='+919876543203',
+            role='CALLER'
+        )
+        self.call = Call.objects.create(
+            caller=self.caller,
+            receiver=self.agent,
+            channel_name='test_agora_channel_001',
+            status='ACCEPTED'
+        )
+
+    def test_caller_can_generate_token_for_accepted_call(self):
+        self.client.force_authenticate(user=self.caller)
+        res = self.client.post(f'/api/calls/{self.call.id}/agora-token/')
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertTrue(res.data['success'])
+        self.assertEqual(res.data['call_id'], self.call.id)
+        self.assertEqual(res.data['channel_name'], 'test_agora_channel_001')
+        self.assertEqual(res.data['uid'], self.caller.id)
+        self.assertIn('token', res.data)
+        self.assertNotIn('certificate', str(res.data).lower())
+
+    def test_agent_can_generate_token_for_accepted_call(self):
+        self.client.force_authenticate(user=self.agent)
+        res = self.client.post(f'/api/calls/{self.call.id}/agora-token/')
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertTrue(res.data['success'])
+        self.assertEqual(res.data['uid'], self.agent.id)
+
+    def test_unauthorized_user_forbidden(self):
+        self.client.force_authenticate(user=self.other_user)
+        res = self.client.post(f'/api/calls/{self.call.id}/agora-token/')
+        self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertFalse(res.data['success'])
+
+    def test_unauthenticated_request_rejected(self):
+        res = self.client.post(f'/api/calls/{self.call.id}/agora-token/')
+        self.assertEqual(res.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_cannot_generate_token_for_ringing_or_ended_call(self):
+        self.client.force_authenticate(user=self.caller)
+        self.call.status = 'RINGING'
+        self.call.save(update_fields=['status'])
+        res_ringing = self.client.post(f'/api/calls/{self.call.id}/agora-token/')
+        self.assertEqual(res_ringing.status_code, status.HTTP_400_BAD_REQUEST)
+
+        self.call.status = 'COMPLETED'
+        self.call.save(update_fields=['status'])
+        res_ended = self.client.post(f'/api/calls/{self.call.id}/agora-token/')
+        self.assertEqual(res_ended.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_client_cannot_spoof_uid(self):
+        self.client.force_authenticate(user=self.caller)
+        res = self.client.post(f'/api/calls/{self.call.id}/agora-token/', {'uid': 999999}, format='json')
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(res.data['uid'], self.caller.id)
+
+
 

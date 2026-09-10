@@ -190,3 +190,7 @@ MAILERS = {
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
 
+# Agora Settings
+AGORA_APP_ID = os.environ.get("AGORA_APP_ID", "")
+AGORA_APP_CERTIFICATE = os.environ.get("AGORA_APP_CERTIFICATE", "")
+

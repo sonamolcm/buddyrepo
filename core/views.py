@@ -2,9 +2,19 @@
 # pyrefly: ignore [missing-import]
 import random
 import datetime
+import time
+import os
 import logging
 from django.utils import timezone
 from django.conf import settings  # type: ignore
+
+try:
+    from agora_token_builder import RtcTokenBuilder  # type: ignore
+except ImportError:
+    try:
+        from agora_token_builder.RtcTokenBuilder import RtcTokenBuilder  # type: ignore
+    except ImportError:
+        RtcTokenBuilder = None
 from django.shortcuts import render  # type: ignore
 from django.contrib.auth import authenticate, logout as django_logout  # type: ignore
 from django.contrib.auth.tokens import default_token_generator  # type: ignore
@@ -2175,6 +2185,115 @@ class EndCallView(APIView):
                 "start_time": call.started_at,
                 "end_time": call.ended_at
             }, status=status.HTTP_200_OK)
+
+
+class AgoraCallTokenView(APIView):
+    """
+    Generate an Agora RTC token for an authenticated participant in a Call.
+    POST /api/calls/{call_id}/agora-token/
+
+    Authentication: Required (JWT / authenticated user).
+    Permission: The authenticated user must be either the caller or the receiver (agent/listener).
+    State: Call must be in an appropriate state for joining Agora (ACCEPTED or ACTIVE).
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, call_id, *args, **kwargs):
+        call = Call.objects.filter(id=call_id).select_related('caller', 'receiver').first()
+        if not call:
+            return Response({
+                "success": False,
+                "message": "Call not found."
+            }, status=status.HTTP_404_NOT_FOUND)
+
+        # Only the caller or assigned receiver/agent can request the token
+        if request.user.id not in (call.caller_id, call.receiver_id):
+            return Response({
+                "success": False,
+                "message": "You do not belong to this call."
+            }, status=status.HTTP_403_FORBIDDEN)
+
+        # Call must be in an appropriate state for joining Agora (ACCEPTED or ACTIVE)
+        if call.status not in ('ACCEPTED', 'ACTIVE'):
+            if call.status in ('PENDING', 'RINGING'):
+                return Response({
+                    "success": False,
+                    "message": f"Cannot generate Agora token for call in status '{call.status}'. Call must be accepted first before joining Agora.",
+                    "call_id": call.id,
+                    "status": call.status
+                }, status=status.HTTP_400_BAD_REQUEST)
+            else:
+                return Response({
+                    "success": False,
+                    "message": f"Cannot generate Agora token for call in status '{call.status}'. Call has ended or is inactive.",
+                    "call_id": call.id,
+                    "status": call.status
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+        # Reuse existing Call.channel_name if it exists
+        channel_name = call.channel_name
+        if not channel_name:
+            channel_name = f"call_{call.category_id or 1}_{call.caller_id}_{call.receiver_id}_{call.id}"
+            call.channel_name = channel_name
+            call.save(update_fields=['channel_name'])
+
+        # Use the authenticated user's database ID as the Agora UID (never trust client UID)
+        uid = int(request.user.id)
+
+        # Read Agora credentials from Django settings (never expose AGORA_APP_CERTIFICATE)
+        app_id = getattr(settings, 'AGORA_APP_ID', '') or os.environ.get('AGORA_APP_ID', '')
+        app_certificate = getattr(settings, 'AGORA_APP_CERTIFICATE', '') or os.environ.get('AGORA_APP_CERTIFICATE', '')
+
+        if not app_id or not app_certificate:
+            return Response({
+                "success": False,
+                "message": "Agora credentials (AGORA_APP_ID / AGORA_APP_CERTIFICATE) are not configured on the server."
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        # Expiry: default 3600 seconds (1 hour), or optional validated client override
+        expires_in = 3600
+        if isinstance(request.data, dict) and 'expires_in' in request.data:
+            try:
+                custom_exp = int(request.data.get('expires_in'))
+                if 60 <= custom_exp <= 86400:
+                    expires_in = custom_exp
+            except (ValueError, TypeError):
+                pass
+
+        privilege_expired_ts = int(time.time()) + expires_in
+        role = 1  # 1: Role_Publisher (allows bidirectional audio)
+
+        if not RtcTokenBuilder:
+            return Response({
+                "success": False,
+                "message": "Agora token builder library is not available on the server."
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        try:
+            token = RtcTokenBuilder.buildTokenWithUid(
+                app_id,
+                app_certificate,
+                channel_name,
+                uid,
+                role,
+                privilege_expired_ts
+            )
+        except Exception as exc:
+            logger.error("Agora token generation failed for call %s: %s", call.id, str(exc))
+            return Response({
+                "success": False,
+                "message": f"Failed to generate Agora token: {str(exc)}"
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        return Response({
+            "success": True,
+            "message": "Agora token generated successfully.",
+            "call_id": call.id,
+            "channel_name": channel_name,
+            "token": token,
+            "uid": uid,
+            "expires_in": expires_in
+        }, status=status.HTTP_200_OK)
 
 
 class CallHistoryView(APIView):

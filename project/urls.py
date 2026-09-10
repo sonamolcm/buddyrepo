@@ -60,6 +60,7 @@ from core.views import (
     RejectCallView,
     StartCallView,
     EndCallView,
+    AgoraCallTokenView,
     CallHistoryView,
     CallDetailView,
     CallerAccountDeleteView,
@@ -503,6 +504,15 @@ urlpatterns = [
     path('call/<int:call_id>/end/', EndCallView.as_view()),
     path('call/<int:call_id>/end', EndCallView.as_view()),
 
+    path('api/calls/<int:call_id>/agora-token/', AgoraCallTokenView.as_view(), name='api-call-agora-token'),
+    path('api/calls/<int:call_id>/agora-token', AgoraCallTokenView.as_view()),
+    path('calls/<int:call_id>/agora-token/', AgoraCallTokenView.as_view()),
+    path('calls/<int:call_id>/agora-token', AgoraCallTokenView.as_view()),
+    path('api/call/<int:call_id>/agora-token/', AgoraCallTokenView.as_view()),
+    path('api/call/<int:call_id>/agora-token', AgoraCallTokenView.as_view()),
+    path('call/<int:call_id>/agora-token/', AgoraCallTokenView.as_view()),
+    path('call/<int:call_id>/agora-token', AgoraCallTokenView.as_view()),
+
     # Double-prefix safety for call workflow
     path('api/api/calls/request/', CallRequestView.as_view()),
     path('api/api/calls/request', CallRequestView.as_view()),
@@ -528,6 +538,10 @@ urlpatterns = [
     path('api/api/calls/<int:call_id>/end', EndCallView.as_view()),
     path('api/api/call/<int:call_id>/end/', EndCallView.as_view()),
     path('api/api/call/<int:call_id>/end', EndCallView.as_view()),
+    path('api/api/calls/<int:call_id>/agora-token/', AgoraCallTokenView.as_view()),
+    path('api/api/calls/<int:call_id>/agora-token', AgoraCallTokenView.as_view()),
+    path('api/api/call/<int:call_id>/agora-token/', AgoraCallTokenView.as_view()),
+    path('api/api/call/<int:call_id>/agora-token', AgoraCallTokenView.as_view()),
 
     # Call History endpoints
     path('api/calls/history/', CallHistoryView.as_view(), name='api-calls-history'),

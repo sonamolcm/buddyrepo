@@ -37,6 +37,7 @@ from .views import (  # type: ignore
     RejectCallView,
     StartCallView,
     EndCallView,
+    AgoraCallTokenView,
     CallHistoryView,
     CallDetailView,
     CallerAccountDeleteView,
@@ -289,6 +290,11 @@ urlpatterns = [
     path('calls/<int:call_id>/end', EndCallView.as_view()),
     path('call/<int:call_id>/end/', EndCallView.as_view()),
     path('call/<int:call_id>/end', EndCallView.as_view()),
+
+    path('calls/<int:call_id>/agora-token/', AgoraCallTokenView.as_view(), name='call-agora-token'),
+    path('calls/<int:call_id>/agora-token', AgoraCallTokenView.as_view()),
+    path('call/<int:call_id>/agora-token/', AgoraCallTokenView.as_view()),
+    path('call/<int:call_id>/agora-token', AgoraCallTokenView.as_view()),
 
     path('calls/history/', CallHistoryView.as_view(), name='calls-history'),
     path('calls/history', CallHistoryView.as_view()),
