@@ -613,4 +613,37 @@ class AgoraCallTokenTestCase(TestCase):
         self.assertEqual(res.data['uid'], self.caller.id)
 
 
+class AgentDashboardTestCase(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.agent = User.objects.create_user(
+            username='agent_dash_user',
+            phone_number='+919876543209',
+            role='AGENT'
+        )
+        self.caller = User.objects.create_user(
+            username='caller_dash_user',
+            phone_number='+919876543208',
+            role='CALLER'
+        )
+
+    def test_agent_dashboard_success(self):
+        self.client.force_authenticate(user=self.agent)
+        res = self.client.get('/api/agent/dashboard/')
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertTrue(res.data['success'])
+        self.assertIn('profile', res.data['data'])
+        self.assertIn('duty', res.data['data'])
+        self.assertIn('earnings', res.data['data'])
+        self.assertIn('calls', res.data['data'])
+        self.assertIn('recent_sessions', res.data['data'])
+        self.assertIn('avatar', res.data['data']['profile'])
+        self.assertIn('profile_picture', res.data['data']['profile'])
+
+    def test_agent_dashboard_requires_agent_role(self):
+        self.client.force_authenticate(user=self.caller)
+        res = self.client.get('/api/agent/dashboard/')
+        self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
+
+
 

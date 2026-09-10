@@ -5692,16 +5692,36 @@ class AgentDashboardView(APIView):
         recent_calls_data = []
         for c in recent_calls:
             caller_name = c.caller.get_full_name() or c.caller.username
-            if hasattr(c.caller, 'caller_profile') and c.caller.caller_profile.name:
-                caller_name = c.caller.caller_profile.name
+            caller_prof = getattr(c.caller, 'caller_profile', None)
+            if caller_prof and getattr(caller_prof, 'name', None):
+                caller_name = caller_prof.name
             recent_calls_data.append({
                 "call_id": c.id,
                 "caller_name": caller_name,
-                "duration_seconds": c.duration_seconds,
-                "coins_earned": c.coins_deducted,
+                "duration_seconds": c.duration_seconds or 0,
+                "coins_earned": c.coins_deducted or 0,
                 "category": c.category.name if c.category else "General",
                 "ended_at": c.ended_at
             })
+
+        # Safe photo resolution (ListenerProfile has profile_picture, not avatar)
+        avatar_url = None
+        photo = getattr(lp, 'profile_picture', None) or getattr(agent, 'profile_picture', None)
+        if photo and hasattr(photo, 'url'):
+            try:
+                avatar_url = request.build_absolute_uri(photo.url)
+            except Exception:
+                avatar_url = None
+
+        # Safe profession resolution
+        profession_name = "Buddy Agent"
+        if getattr(lp, 'profession', None):
+            profession_name = lp.profession.name
+        elif getattr(lp, 'interests', None):
+            if isinstance(lp.interests, list):
+                profession_name = ", ".join(str(i) for i in lp.interests) if lp.interests else "Buddy Agent"
+            else:
+                profession_name = str(lp.interests)
 
         return Response({
             "success": True,
@@ -5712,14 +5732,15 @@ class AgentDashboardView(APIView):
                     "username": agent.username,
                     "email": agent.email,
                     "phone_number": agent.phone_number,
-                    "profession": lp.profession.name if lp.profession else (lp.interests or "Buddy Agent"),
+                    "profession": profession_name,
                     "bio": lp.bio,
                     "rate_per_second": lp.rate_per_second,
-                    "rating": float(lp.rating),
+                    "rating": float(lp.rating or 5.0),
                     "is_on_duty": lp.is_on_duty,
                     "is_busy": lp.is_busy,
                     "is_verified": lp.is_verified,
-                    "avatar": request.build_absolute_uri(lp.avatar.url) if lp.avatar and hasattr(lp.avatar, 'url') else None
+                    "avatar": avatar_url,
+                    "profile_picture": avatar_url
                 },
                 "duty": {
                     "is_on_duty": lp.is_on_duty,
@@ -5733,7 +5754,7 @@ class AgentDashboardView(APIView):
                 },
                 "calls": {
                     "today_count": today_calls_count,
-                    "lifetime_count": lp.total_calls
+                    "lifetime_count": lp.total_calls or 0
                 },
                 "recent_sessions": recent_calls_data
             }
