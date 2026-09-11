@@ -94,6 +94,7 @@ from .serializers import (  # type: ignore
     AgentWalletSerializer,
     AgentPayoutSerializer,
     AgentSessionSerializer,
+    FCMTokenUpdateSerializer,
 )
 
 
@@ -6075,7 +6076,30 @@ class AdminUserToggleStatusView(APIView):
         }, status=status.HTTP_200_OK)
 
 
+class FCMTokenUpdateView(APIView):
+    """
+    Update FCM Device Token for the authenticated user (Caller or Agent).
+    POST /api/fcm-token/
+    Authentication: JWT access token required (Bearer).
+    Request body: {"fcm_token": "FCM_DEVICE_TOKEN"}
+    """
+    permission_classes = [permissions.IsAuthenticated]
 
+    def post(self, request):
+        serializer = FCMTokenUpdateSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response({
+                "success": False,
+                "message": "Validation failed.",
+                "errors": serializer.errors
+            }, status=status.HTTP_400_BAD_REQUEST)
 
+        fcm_token = serializer.validated_data['fcm_token']
+        user = request.user
+        user.fcm_token = fcm_token
+        user.save(update_fields=['fcm_token'])
 
-
+        return Response({
+            "success": True,
+            "message": "FCM token updated successfully."
+        }, status=status.HTTP_200_OK)

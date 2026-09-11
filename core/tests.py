@@ -715,3 +715,33 @@ class CallerSignupCompleteProfileTestCase(TestCase):
         )
         self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertFalse(res.data['success'])
+
+
+class FCMTokenUpdateTestCase(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(
+            username="fcm_test_user",
+            phone_number="+919876543277",
+            role="AGENT"
+        )
+
+    def test_fcm_token_update_authenticated_success(self):
+        self.client.force_authenticate(user=self.user)
+        res = self.client.post('/api/fcm-token/', {'fcm_token': 'test_device_token_xyz_123'}, format='json')
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertTrue(res.data['success'])
+        self.assertEqual(res.data['message'], "FCM token updated successfully.")
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.fcm_token, 'test_device_token_xyz_123')
+
+    def test_fcm_token_update_unauthenticated_fails(self):
+        res = self.client.post('/api/fcm-token/', {'fcm_token': 'test_device_token_xyz_123'}, format='json')
+        self.assertEqual(res.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_fcm_token_update_empty_token_fails(self):
+        self.client.force_authenticate(user=self.user)
+        res = self.client.post('/api/fcm-token/', {'fcm_token': '   '}, format='json')
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(res.data['success'])
+

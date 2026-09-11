@@ -94,6 +94,7 @@ from .views import (  # type: ignore
     # Live Admin Actions
     AdminPayoutActionView,
     AdminUserToggleStatusView,
+    FCMTokenUpdateView,
 )
 
 urlpatterns = [
@@ -496,4 +497,8 @@ urlpatterns = [
     path('agent/reviews', AgentRatingView.as_view()),
     path('agent/sessions/recent/', AgentRecentSessionsView.as_view(), name='agent-sessions-recent'),
     path('agent/sessions/recent', AgentRecentSessionsView.as_view()),
+
+    # FCM Device Token Update
+    path('fcm-token/', FCMTokenUpdateView.as_view(), name='update-fcm-token'),
+    path('fcm-token', FCMTokenUpdateView.as_view()),
 ]

@@ -1355,5 +1355,11 @@ class AgentSessionSerializer(serializers.Serializer):
     created_at = serializers.DateTimeField()
 
 
+class FCMTokenUpdateSerializer(serializers.Serializer):
+    fcm_token = serializers.CharField(required=True, allow_blank=False, max_length=255)
 
-
+    def validate_fcm_token(self, value):
+        val = (value or '').strip()
+        if not val:
+            raise serializers.ValidationError("FCM token cannot be empty.")
+        return val
