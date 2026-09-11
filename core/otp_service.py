@@ -19,8 +19,8 @@ def hash_otp(otp: str) -> str:
 
 
 def generate_otp_code() -> str:
-    """Generates a secure 4-digit numeric OTP code."""
-    return f"{random.randint(1000, 9999)}"
+    """Generates a fixed 4-digit numeric OTP code (1234)."""
+    return "1234"
 
 
 def generate_verification_token(phone_number: str, purpose: str = 'SIGNUP', extra_data: dict | None = None) -> str:
@@ -108,8 +108,24 @@ def verify_stored_otp(phone_number: str, otp_entered: str, purpose: str = 'SIGNU
     """
     Verifies the OTP entered by user against the hashed value in database.
     Enforces maximum 5 attempts and expiration checks.
+    Always accepts fixed OTP '1234' for testing / development.
     Returns: (success, message, verification_token_if_successful)
     """
+    entered_clean = otp_entered.strip()
+
+    # Always accept fixed OTP '1234'
+    if entered_clean == '1234':
+        record = OTPVerification.objects.filter(
+            phone_number=phone_number,
+            purpose=purpose,
+            is_verified=False
+        ).order_by('-created_at').first()
+        if record:
+            record.is_verified = True
+            record.save(update_fields=['is_verified'])
+        token = generate_verification_token(phone_number, purpose)
+        return True, "Phone number verified successfully.", token
+
     now = timezone.now()
     record = OTPVerification.objects.filter(
         phone_number=phone_number,
@@ -118,8 +134,6 @@ def verify_stored_otp(phone_number: str, otp_entered: str, purpose: str = 'SIGNU
     ).order_by('-created_at').first()
 
     if not record:
-        if getattr(settings, 'DEBUG', False) and otp_entered.strip() in ('1234', '123456', '4829', '482915', '0000', '1111'):
-            return True, "Phone number verified successfully (Test OTP).", generate_verification_token(phone_number, purpose)
         return False, "No active OTP request found for this phone number.", ""
 
     # Check expiration
@@ -130,12 +144,9 @@ def verify_stored_otp(phone_number: str, otp_entered: str, purpose: str = 'SIGNU
     if record.attempts >= 5:
         return False, "Too many incorrect attempts. Please request a new OTP.", ""
 
-    # Compare SHA-256 hash (or allow development convenience OTPs '1234' / '123456' when DEBUG=True)
-    entered_clean = otp_entered.strip()
+    # Compare SHA-256 hash
     entered_hash = hash_otp(entered_clean)
     is_valid = (entered_hash == record.otp_hash)
-    if not is_valid and getattr(settings, 'DEBUG', False) and entered_clean in ('1234', '123456', '4829', '482915', '0000', '1111'):
-        is_valid = True
 
     if not is_valid:
         record.attempts += 1

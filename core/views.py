@@ -142,9 +142,8 @@ class CallerSignupSendOTPView(APIView):
 
             response_data = {
                 "phone_number": phone_number,
+                "otp": otp_code,
             }
-            if settings.DEBUG:
-                response_data["otp"] = otp_code
 
             return Response({
                 "success": True,
