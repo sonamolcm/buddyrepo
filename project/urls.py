@@ -56,6 +56,7 @@ from core.views import (
     CoinTransactionHistoryView,
     CallRequestView,
     IncomingCallsView,
+    CallStatusUpdateView,
     AcceptCallView,
     RejectCallView,
     StartCallView,
@@ -467,6 +468,8 @@ urlpatterns = [
     path('api/call/incoming', IncomingCallsView.as_view()),
     path('call/incoming/', IncomingCallsView.as_view()),
     path('call/incoming', IncomingCallsView.as_view()),
+
+    path('api/calls/<int:call_id>/status/', CallStatusUpdateView.as_view(), name='api-call-status-update'),
 
     path('api/calls/<int:call_id>/accept/', AcceptCallView.as_view(), name='api-call-accept'),
     path('api/calls/<int:call_id>/accept', AcceptCallView.as_view()),

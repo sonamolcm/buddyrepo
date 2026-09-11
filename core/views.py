@@ -1812,6 +1812,40 @@ def find_available_agent_for_category(category):
     return test_agent
 
 
+def generate_agora_audio_token(channel_name: str, uid: int, expires_in: int = 3600) -> str:
+    """
+    Generates an Agora RTC audio-only Publisher token for the specified channel and integer UID.
+    Reads AGORA_APP_ID and AGORA_APP_CERTIFICATE securely from Django settings / environment.
+    Never exposes credentials or certificate in API responses or logs.
+    """
+    app_id = getattr(settings, 'AGORA_APP_ID', '') or os.environ.get('AGORA_APP_ID', '')
+    app_certificate = getattr(settings, 'AGORA_APP_CERTIFICATE', '') or os.environ.get('AGORA_APP_CERTIFICATE', '')
+
+    if not app_id or not app_certificate:
+        logger.warning("Agora credentials (AGORA_APP_ID / AGORA_APP_CERTIFICATE) are not configured on the server.")
+        return ""
+
+    if not RtcTokenBuilder:
+        logger.warning("Agora RtcTokenBuilder library is not available.")
+        return ""
+
+    try:
+        privilege_expired_ts = int(time.time()) + int(expires_in)
+        role = 1  # 1: Role_Publisher (bidirectional audio)
+        token = RtcTokenBuilder.buildTokenWithUid(
+            app_id,
+            app_certificate,
+            channel_name,
+            int(uid),
+            role,
+            privilege_expired_ts
+        )
+        return token
+    except Exception as exc:
+        logger.error("Agora token generation failed for channel %s, uid %s: %s", channel_name, uid, str(exc))
+        return ""
+
+
 class CallRequestView(APIView):
     """
     1. CALLER REQUESTS A CALL
@@ -1917,11 +1951,17 @@ class CallRequestView(APIView):
             url = agent.listener_profile.profile_picture.url
             agent_photo = request.build_absolute_uri(url) if not url.startswith(('http://', 'https://')) else url
 
+        # Generate Agora audio token for Caller using call channel_name and caller.id
+        caller_agora_token = generate_agora_audio_token(
+            channel_name=call.channel_name,
+            uid=int(caller.id)
+        )
+
         return Response({
             "success": True,
             "message": "Call request created successfully. Waiting for agent to accept.",
             "call_id": call.id,
-            "status": call.status,
+            "status": "RINGING",
             "category": {
                 "id": category.id,
                 "name": category.name,
@@ -1932,6 +1972,8 @@ class CallRequestView(APIView):
                 "profile_picture": agent_photo,
             },
             "channel_name": call.channel_name,
+            "agora_token": caller_agora_token or "",
+            "uid": int(caller.id),
             "requested_at": call.created_at
         }, status=status.HTTP_201_CREATED)
 
@@ -1958,23 +2000,123 @@ class IncomingCallsView(APIView):
         }, status=status.HTTP_200_OK)
 
 
-class AcceptCallView(APIView):
+def complete_call_session(call, requesting_user):
     """
-    3. AGENT ACCEPTS CALL
-    POST /api/calls/<int:call_id>/accept/
-    Authentication: JWT required. Assigned Agent only.
+    Core completion and wallet settlement logic for a call.
+    Reused by both CallStatusUpdateView (status='completed') and EndCallView.
     """
-    permission_classes = [permissions.IsAuthenticated, IsAgentUser]
+    if requesting_user.id not in (call.caller_id, call.receiver_id):
+        return False, {
+            "success": False,
+            "message": "You do not belong to this call."
+        }, status.HTTP_403_FORBIDDEN
 
-    def post(self, request, call_id, *args, **kwargs):
-        with transaction.atomic():
-            call = Call.objects.select_for_update().filter(id=call_id).select_related('caller', 'receiver').first()
-            if not call:
-                return Response({
-                    "success": False,
-                    "message": "Call not found."
-                }, status=status.HTTP_404_NOT_FOUND)
+    if call.status in ('COMPLETED', 'ENDED'):
+        return False, {
+            "success": False,
+            "message": "Call has already been ended.",
+            "call_id": call.id,
+            "status": "COMPLETED",
+            "duration": call.duration_seconds,
+            "coins_deducted": call.coins_deducted
+        }, status.HTTP_400_BAD_REQUEST
 
+    if call.status not in ('ACTIVE', 'ACCEPTED', 'RINGING', 'PENDING'):
+        return False, {
+            "success": False,
+            "message": f"Cannot end call in status '{call.status}'."
+        }, status.HTTP_400_BAD_REQUEST
+
+    now = timezone.now()
+    call.status = 'COMPLETED'
+    call.ended_at = now
+
+    if call.started_at:
+        duration_secs = int((now - call.started_at).total_seconds())
+    else:
+        duration_secs = 0
+    call.duration_seconds = max(duration_secs, 0)
+
+    # Determine Agent rate per second (3, 5, or 10 coins/sec)
+    rate_per_second = 3
+    agent_profile = getattr(call.receiver, 'listener_profile', None) or getattr(call.receiver, 'buddy_profile', None)
+    if agent_profile and hasattr(agent_profile, 'rate_per_second') and agent_profile.rate_per_second in (3, 5, 10):
+        rate_per_second = agent_profile.rate_per_second
+
+    coins_to_deduct = call.duration_seconds * rate_per_second
+    actual_deducted = 0
+
+    if coins_to_deduct > 0:
+        caller_wallet, _ = Wallet.objects.select_for_update().get_or_create(user=call.caller, defaults={'balance': 50})
+        actual_deducted = min(caller_wallet.balance, coins_to_deduct)
+        if actual_deducted > 0:
+            caller_wallet.balance -= actual_deducted
+            caller_wallet.save(update_fields=['balance'])
+            WalletTransaction.objects.create(
+                wallet=caller_wallet,
+                transaction_type='DEBIT',
+                amount=actual_deducted,
+                description=f"Call #{call.id} with {call.receiver.username} ({call.duration_seconds}s @ {rate_per_second} coins/s)"
+            )
+
+    call.coins_deducted = actual_deducted
+    call.save(update_fields=['status', 'ended_at', 'duration_seconds', 'coins_deducted'])
+
+    # Credit Agent Wallet and log AgentEarning
+    if actual_deducted > 0:
+        agent_wallet, _ = AgentWallet.objects.select_for_update().get_or_create(agent=call.receiver)
+        agent_wallet.balance += actual_deducted
+        agent_wallet.total_earned += actual_deducted
+        agent_wallet.save(update_fields=['balance', 'total_earned', 'updated_at'])
+
+        AgentEarning.objects.create(
+            agent=call.receiver,
+            call=call,
+            coins=actual_deducted,
+            earning_type='VOICE',
+            description=f"Call #{call.id} with {call.caller.username} ({call.duration_seconds}s @ {rate_per_second} coins/s)"
+        )
+
+    # Update Agent stats on ListenerProfile
+    if hasattr(call.receiver, 'listener_profile'):
+        lp = call.receiver.listener_profile
+        lp.total_calls = (lp.total_calls or 0) + 1
+        lp.total_earned_coins = (lp.total_earned_coins or 0) + actual_deducted
+        lp.is_busy = False
+        lp.is_available = lp.is_on_duty
+        lp.save(update_fields=['total_calls', 'total_earned_coins', 'is_busy', 'is_available'])
+
+    # Make Agent available again
+    set_agent_busy(call.receiver, False)
+
+    return True, {
+        "success": True,
+        "message": "Call ended successfully.",
+        "call_id": call.id,
+        "status": "COMPLETED",
+        "duration": call.duration_seconds,
+        "rate_per_second": rate_per_second,
+        "coins_deducted": call.coins_deducted,
+        "agent_earned": actual_deducted,
+        "start_time": call.started_at,
+        "end_time": call.ended_at
+    }, status.HTTP_200_OK
+
+
+def _handle_call_status_update(request, call_id, target_status):
+    """
+    Internal handler for call status transitions (accepted, rejected, completed).
+    """
+    with transaction.atomic():
+        call = Call.objects.select_for_update().filter(id=call_id).select_related('caller', 'receiver').first()
+        if not call:
+            return Response({
+                "success": False,
+                "message": "Call not found."
+            }, status=status.HTTP_404_NOT_FOUND)
+
+        # 1. ACCEPTED
+        if target_status == 'ACCEPTED':
             if call.receiver_id != request.user.id:
                 return Response({
                     "success": False,
@@ -1994,6 +2136,12 @@ class AcceptCallView(APIView):
 
             set_agent_busy(request.user, True)
 
+            # Generate Agora RTC audio token for Agent using exact same channel_name and Agent UID
+            agent_agora_token = generate_agora_audio_token(
+                channel_name=call.channel_name,
+                uid=int(request.user.id)
+            )
+
             caller_name = call.caller.get_full_name() or call.caller.username
             if hasattr(call.caller, 'caller_profile') and call.caller.caller_profile.name:
                 caller_name = call.caller.caller_profile.name
@@ -2002,33 +2150,19 @@ class AcceptCallView(APIView):
                 "success": True,
                 "message": "Call accepted successfully.",
                 "call_id": call.id,
-                "status": call.status,
-                "accepted_at": call.accepted_at,
+                "status": "ACCEPTED",
                 "channel_name": call.channel_name,
+                "agora_token": agent_agora_token or "",
+                "uid": int(request.user.id),
+                "accepted_at": call.accepted_at,
                 "caller": {
                     "id": call.caller.id,
                     "name": caller_name
                 }
             }, status=status.HTTP_200_OK)
 
-
-class RejectCallView(APIView):
-    """
-    4. AGENT REJECTS CALL
-    POST /api/calls/<int:call_id>/reject/
-    Authentication: JWT required. Assigned Agent only.
-    """
-    permission_classes = [permissions.IsAuthenticated, IsAgentUser]
-
-    def post(self, request, call_id, *args, **kwargs):
-        with transaction.atomic():
-            call = Call.objects.select_for_update().filter(id=call_id).select_related('receiver').first()
-            if not call:
-                return Response({
-                    "success": False,
-                    "message": "Call not found."
-                }, status=status.HTTP_404_NOT_FOUND)
-
+        # 2. REJECTED
+        elif target_status == 'REJECTED':
             if call.receiver_id != request.user.id:
                 return Response({
                     "success": False,
@@ -2046,7 +2180,6 @@ class RejectCallView(APIView):
             call.rejected_at = now
             call.save(update_fields=['status', 'rejected_at'])
 
-            # Make Agent available again
             set_agent_busy(call.receiver, False)
 
             return Response({
@@ -2055,6 +2188,65 @@ class RejectCallView(APIView):
                 "call_id": call.id,
                 "status": "REJECTED"
             }, status=status.HTTP_200_OK)
+
+        # 3. COMPLETED / ENDED
+        elif target_status in ('COMPLETED', 'ENDED'):
+            ok, resp_data, status_code = complete_call_session(call, request.user)
+            return Response(resp_data, status=status_code)
+
+        else:
+            return Response({
+                "success": False,
+                "message": f"Invalid status '{target_status}'. Supported statuses: 'accepted', 'rejected', 'completed'."
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+
+class CallStatusUpdateView(APIView):
+    """
+    Unified Call Status API (Heartmate pattern):
+    POST /api/calls/<int:call_id>/status/
+
+    Supported statuses:
+      - "accepted": Agent accepts incoming call. Generates Agora audio token for Agent.
+      - "rejected": Agent rejects call. Frees Agent availability.
+      - "completed": Caller or Agent ends call. Settles wallet balance/earnings and restores duty availability.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, call_id, *args, **kwargs):
+        status_raw = request.data.get('status')
+        if not status_raw or not isinstance(status_raw, str):
+            return Response({
+                "success": False,
+                "message": "The 'status' field is required. Supported statuses: 'accepted', 'rejected', 'completed'."
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        target_status = status_raw.strip().upper()
+        return _handle_call_status_update(request, call_id, target_status)
+
+
+class AcceptCallView(APIView):
+    """
+    3. AGENT ACCEPTS CALL (Backward compatible)
+    POST /api/calls/<int:call_id>/accept/
+    Delegates to unified CallStatusUpdateView with status='accepted'.
+    """
+    permission_classes = [permissions.IsAuthenticated, IsAgentUser]
+
+    def post(self, request, call_id, *args, **kwargs):
+        return _handle_call_status_update(request, call_id, 'ACCEPTED')
+
+
+class RejectCallView(APIView):
+    """
+    4. AGENT REJECTS CALL (Backward compatible)
+    POST /api/calls/<int:call_id>/reject/
+    Delegates to unified CallStatusUpdateView with status='rejected'.
+    """
+    permission_classes = [permissions.IsAuthenticated, IsAgentUser]
+
+    def post(self, request, call_id, *args, **kwargs):
+        return _handle_call_status_update(request, call_id, 'REJECTED')
 
 
 class StartCallView(APIView):
@@ -2113,127 +2305,24 @@ class StartCallView(APIView):
 
 class EndCallView(APIView):
     """
-    7. END CALL
+    7. END CALL (Backward compatible)
     POST /api/calls/<int:call_id>/end/
-    Authentication: JWT required. Caller or assigned Agent only.
+    Delegates to unified call completion logic.
     """
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request, call_id, *args, **kwargs):
-        with transaction.atomic():
-            call = Call.objects.select_for_update().filter(id=call_id).select_related('caller', 'receiver').first()
-            if not call:
-                return Response({
-                    "success": False,
-                    "message": "Call not found."
-                }, status=status.HTTP_404_NOT_FOUND)
-
-            if request.user.id not in (call.caller_id, call.receiver_id):
-                return Response({
-                    "success": False,
-                    "message": "You do not belong to this call."
-                }, status=status.HTTP_403_FORBIDDEN)
-
-            if call.status in ('COMPLETED', 'ENDED'):
-                return Response({
-                    "success": False,
-                    "message": "Call has already been ended.",
-                    "call_id": call.id,
-                    "status": "COMPLETED",
-                    "duration": call.duration_seconds,
-                    "coins_deducted": call.coins_deducted
-                }, status=status.HTTP_400_BAD_REQUEST)
-
-            if call.status not in ('ACTIVE', 'ACCEPTED', 'RINGING', 'PENDING'):
-                return Response({
-                    "success": False,
-                    "message": f"Cannot end call in status '{call.status}'."
-                }, status=status.HTTP_400_BAD_REQUEST)
-
-            now = timezone.now()
-            call.status = 'COMPLETED'
-            call.ended_at = now
-
-            if call.started_at:
-                duration_secs = int((now - call.started_at).total_seconds())
-            else:
-                duration_secs = 0
-            call.duration_seconds = max(duration_secs, 0)
-
-            # Determine Agent rate per second (3, 5, or 10 coins/sec)
-            rate_per_second = 3
-            agent_profile = getattr(call.receiver, 'listener_profile', None) or getattr(call.receiver, 'buddy_profile', None)
-            if agent_profile and hasattr(agent_profile, 'rate_per_second') and agent_profile.rate_per_second in (3, 5, 10):
-                rate_per_second = agent_profile.rate_per_second
-
-            coins_to_deduct = call.duration_seconds * rate_per_second
-            actual_deducted = 0
-
-            if coins_to_deduct > 0:
-                caller_wallet, _ = Wallet.objects.select_for_update().get_or_create(user=call.caller, defaults={'balance': 50})
-                actual_deducted = min(caller_wallet.balance, coins_to_deduct)
-                if actual_deducted > 0:
-                    caller_wallet.balance -= actual_deducted
-                    caller_wallet.save(update_fields=['balance'])
-                    WalletTransaction.objects.create(
-                        wallet=caller_wallet,
-                        transaction_type='DEBIT',
-                        amount=actual_deducted,
-                        description=f"Call #{call.id} with {call.receiver.username} ({call.duration_seconds}s @ {rate_per_second} coins/s)"
-                    )
-
-            call.coins_deducted = actual_deducted
-            call.save(update_fields=['status', 'ended_at', 'duration_seconds', 'coins_deducted'])
-
-            # Credit Agent Wallet and log AgentEarning
-            if actual_deducted > 0:
-                agent_wallet, _ = AgentWallet.objects.select_for_update().get_or_create(agent=call.receiver)
-                agent_wallet.balance += actual_deducted
-                agent_wallet.total_earned += actual_deducted
-                agent_wallet.save(update_fields=['balance', 'total_earned', 'updated_at'])
-
-                AgentEarning.objects.create(
-                    agent=call.receiver,
-                    call=call,
-                    coins=actual_deducted,
-                    earning_type='VOICE',
-                    description=f"Call #{call.id} with {call.caller.username} ({call.duration_seconds}s @ {rate_per_second} coins/s)"
-                )
-
-            # Update Agent stats on ListenerProfile
-            if hasattr(call.receiver, 'listener_profile'):
-                lp = call.receiver.listener_profile
-                lp.total_calls = (lp.total_calls or 0) + 1
-                lp.total_earned_coins = (lp.total_earned_coins or 0) + actual_deducted
-                lp.is_busy = False
-                lp.is_available = lp.is_on_duty
-                lp.save(update_fields=['total_calls', 'total_earned_coins', 'is_busy', 'is_available'])
-
-            # Make Agent available again
-            set_agent_busy(call.receiver, False)
-
-            return Response({
-                "success": True,
-                "message": "Call ended successfully.",
-                "call_id": call.id,
-                "status": "COMPLETED",
-                "duration": call.duration_seconds,
-                "rate_per_second": rate_per_second,
-                "coins_deducted": call.coins_deducted,
-                "agent_earned": actual_deducted,
-                "start_time": call.started_at,
-                "end_time": call.ended_at
-            }, status=status.HTTP_200_OK)
+        return _handle_call_status_update(request, call_id, 'COMPLETED')
 
 
 class AgoraCallTokenView(APIView):
     """
-    Generate an Agora RTC token for an authenticated participant in a Call.
+    Generate an Agora RTC audio token for an authenticated participant in a Call.
     POST /api/calls/{call_id}/agora-token/
 
     Authentication: Required (JWT / authenticated user).
     Permission: The authenticated user must be either the caller or the receiver (agent/listener).
-    State: Call must be in an appropriate state for joining Agora (ACCEPTED or ACTIVE).
+    State: Call must be active or ringing (RINGING, PENDING, ACCEPTED, ACTIVE).
     """
     permission_classes = [permissions.IsAuthenticated]
 
@@ -2252,22 +2341,14 @@ class AgoraCallTokenView(APIView):
                 "message": "You do not belong to this call."
             }, status=status.HTTP_403_FORBIDDEN)
 
-        # Call must be in an appropriate state for joining Agora (ACCEPTED or ACTIVE)
-        if call.status not in ('ACCEPTED', 'ACTIVE'):
-            if call.status in ('PENDING', 'RINGING'):
-                return Response({
-                    "success": False,
-                    "message": f"Cannot generate Agora token for call in status '{call.status}'. Call must be accepted first before joining Agora.",
-                    "call_id": call.id,
-                    "status": call.status
-                }, status=status.HTTP_400_BAD_REQUEST)
-            else:
-                return Response({
-                    "success": False,
-                    "message": f"Cannot generate Agora token for call in status '{call.status}'. Call has ended or is inactive.",
-                    "call_id": call.id,
-                    "status": call.status
-                }, status=status.HTTP_400_BAD_REQUEST)
+        # Allow token generation while call is RINGING, PENDING, ACCEPTED, or ACTIVE
+        if call.status not in ('RINGING', 'PENDING', 'ACCEPTED', 'ACTIVE'):
+            return Response({
+                "success": False,
+                "message": f"Cannot generate Agora token for call in status '{call.status}'. Call has ended or is inactive.",
+                "call_id": call.id,
+                "status": call.status
+            }, status=status.HTTP_400_BAD_REQUEST)
 
         # Reuse existing Call.channel_name if it exists
         channel_name = call.channel_name
@@ -2279,16 +2360,6 @@ class AgoraCallTokenView(APIView):
         # Use the authenticated user's database ID as the Agora UID (never trust client UID)
         uid = int(request.user.id)
 
-        # Read Agora credentials from Django settings (never expose AGORA_APP_CERTIFICATE)
-        app_id = getattr(settings, 'AGORA_APP_ID', '') or os.environ.get('AGORA_APP_ID', '')
-        app_certificate = getattr(settings, 'AGORA_APP_CERTIFICATE', '') or os.environ.get('AGORA_APP_CERTIFICATE', '')
-
-        if not app_id or not app_certificate:
-            return Response({
-                "success": False,
-                "message": "Agora credentials (AGORA_APP_ID / AGORA_APP_CERTIFICATE) are not configured on the server."
-            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
         # Expiry: default 3600 seconds (1 hour), or optional validated client override
         expires_in = 3600
         if isinstance(request.data, dict) and 'expires_in' in request.data:
@@ -2299,29 +2370,11 @@ class AgoraCallTokenView(APIView):
             except (ValueError, TypeError):
                 pass
 
-        privilege_expired_ts = int(time.time()) + expires_in
-        role = 1  # 1: Role_Publisher (allows bidirectional audio)
-
-        if not RtcTokenBuilder:
+        token = generate_agora_audio_token(channel_name, uid, expires_in)
+        if not token:
             return Response({
                 "success": False,
-                "message": "Agora token builder library is not available on the server."
-            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-        try:
-            token = RtcTokenBuilder.buildTokenWithUid(
-                app_id,
-                app_certificate,
-                channel_name,
-                uid,
-                role,
-                privilege_expired_ts
-            )
-        except Exception as exc:
-            logger.error("Agora token generation failed for call %s: %s", call.id, str(exc))
-            return Response({
-                "success": False,
-                "message": f"Failed to generate Agora token: {str(exc)}"
+                "message": "Failed to generate Agora token. Check server Agora credentials."
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
         return Response({

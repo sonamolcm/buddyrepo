@@ -33,6 +33,7 @@ from .views import (  # type: ignore
     CoinTransactionHistoryView,
     CallRequestView,
     IncomingCallsView,
+    CallStatusUpdateView,
     AcceptCallView,
     RejectCallView,
     StartCallView,
@@ -271,6 +272,9 @@ urlpatterns = [
     path('calls/incoming', IncomingCallsView.as_view()),
     path('call/incoming/', IncomingCallsView.as_view()),
     path('call/incoming', IncomingCallsView.as_view()),
+
+    path('calls/<int:call_id>/status/', CallStatusUpdateView.as_view(), name='call-status-update'),
+    path('calls/<int:call_id>/status', CallStatusUpdateView.as_view()),
 
     path('calls/<int:call_id>/accept/', AcceptCallView.as_view(), name='call-accept'),
     path('calls/<int:call_id>/accept', AcceptCallView.as_view()),
