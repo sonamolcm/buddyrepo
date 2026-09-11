@@ -6,3 +6,4 @@ django-filter>=24.0
 pillow>=10.0.0
 python-dotenv>=1.0.0
 agora-token-builder>=1.0.0
+firebase-admin>=6.5.0

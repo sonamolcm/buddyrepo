@@ -1891,6 +1891,24 @@ class CallRequestView(APIView):
             status='RINGING',
         )
 
+        # Trigger FCM incoming-call data notification to assigned Agent
+        caller_display_name = caller.get_full_name() or caller.username
+        if hasattr(caller, 'caller_profile') and caller.caller_profile.name:
+            caller_display_name = caller.caller_profile.name
+
+        try:
+            from .fcm_service import send_incoming_call_fcm
+            send_incoming_call_fcm(
+                fcm_token=getattr(agent, 'fcm_token', None),
+                call_id=call.id,
+                channel_name=call.channel_name,
+                caller_id=caller.id,
+                caller_name=caller_display_name,
+                call_type='audio',
+            )
+        except Exception as fcm_err:
+            logger.warning("FCM notification dispatch encountered an error: %s", str(fcm_err))
+
         agent_name = agent.get_full_name() or agent.username
         agent_photo = None
         if hasattr(agent, 'listener_profile') and agent.listener_profile.name:
@@ -2326,22 +2344,20 @@ class CallHistoryView(APIView):
     - Agent sees calls assigned to them.
     - Never expose another user's call history.
     """
-    permission_classes = [permissions.AllowAny]
+    permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request, *args, **kwargs):
-        user = _resolve_user_for_wallet(request, **kwargs)
-        if not user:
+        user = request.user
+        if not user or not user.is_authenticated:
             return Response({
                 "success": False,
-                "message": "User not found or authentication required."
-            }, status=status.HTTP_404_NOT_FOUND)
+                "message": "Authentication required."
+            }, status=status.HTTP_401_UNAUTHORIZED)
 
         if getattr(user, 'is_listener', False):
             queryset = Call.objects.filter(receiver=user)
-        elif getattr(user, 'is_caller', False):
-            queryset = Call.objects.filter(caller=user)
         else:
-            queryset = Call.objects.filter(Q(caller=user) | Q(receiver=user))
+            queryset = Call.objects.filter(caller=user)
 
         call_type = request.query_params.get('type') or request.query_params.get('call_type')
         if call_type:
@@ -2437,8 +2453,8 @@ class CallHistoryView(APIView):
         """
         Optional manual call logging endpoint for clients
         """
-        caller = _resolve_user_for_wallet(request, **kwargs)
-        if not caller:
+        caller = request.user
+        if not caller or not caller.is_authenticated:
             return Response({
                 "success": False,
                 "message": "Caller authentication required."

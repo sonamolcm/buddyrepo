@@ -194,3 +194,6 @@ MEDIA_ROOT = BASE_DIR / 'media'
 AGORA_APP_ID = os.environ.get("AGORA_APP_ID", "")
 AGORA_APP_CERTIFICATE = os.environ.get("AGORA_APP_CERTIFICATE", "")
 
+# Firebase Cloud Messaging (FCM) Settings
+FIREBASE_CREDENTIALS_PATH = os.environ.get("FIREBASE_CREDENTIALS_PATH", "")
+FIREBASE_CREDENTIALS_JSON = os.environ.get("FIREBASE_CREDENTIALS_JSON", "")

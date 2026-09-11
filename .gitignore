@@ -41,3 +41,9 @@ media/
 # Unwanted folders
 Downloads/
 OneDrive/
+
+# Firebase credentials
+*firebase*.json
+*adminsdk*.json
+serviceAccountKey*.json
+gabby-talk-*.json

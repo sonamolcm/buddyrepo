@@ -745,3 +745,75 @@ class FCMTokenUpdateTestCase(TestCase):
         self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertFalse(res.data['success'])
 
+
+class FCMCallNotificationTestCase(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.category = Category.objects.create(name="FCM Health", is_active=True)
+        self.caller = User.objects.create_user(
+            username="caller_fcm_user",
+            phone_number="+919876543261",
+            role="CALLER",
+            first_name="Alice Caller"
+        )
+        self.agent = User.objects.create_user(
+            username="agent_fcm_user",
+            phone_number="+919876543262",
+            role="AGENT",
+            fcm_token="agent_sample_fcm_token_999"
+        )
+        self.agent_profile = ListenerProfile.objects.create(
+            user=self.agent,
+            listener_id="agent_fcm_user",
+            name="Bob Agent",
+            profession=self.category,
+            is_available=True,
+            is_on_duty=True,
+            is_busy=False
+        )
+
+    def test_call_request_triggers_fcm_when_agent_has_token(self):
+        from unittest.mock import patch
+        self.client.force_authenticate(user=self.caller)
+        with patch('core.fcm_service.send_incoming_call_fcm') as mock_send_fcm:
+            mock_send_fcm.return_value = (True, "FCM sent successfully")
+            res = self.client.post('/api/calls/request/', {'category_id': self.category.id}, format='json')
+            self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+            self.assertTrue(res.data['success'])
+            mock_send_fcm.assert_called_once()
+            call_kwargs = mock_send_fcm.call_args.kwargs
+            self.assertEqual(call_kwargs['fcm_token'], 'agent_sample_fcm_token_999')
+            self.assertEqual(call_kwargs['call_type'], 'audio')
+            self.assertEqual(call_kwargs['caller_id'], self.caller.id)
+
+    def test_call_request_when_agent_has_no_fcm_token_succeeds(self):
+        self.agent.fcm_token = None
+        self.agent.save(update_fields=['fcm_token'])
+        self.client.force_authenticate(user=self.caller)
+        res = self.client.post('/api/calls/request/', {'category_id': self.category.id}, format='json')
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+        self.assertTrue(res.data['success'])
+
+    def test_call_request_when_fcm_send_fails_does_not_break_call(self):
+        from unittest.mock import patch
+        self.client.force_authenticate(user=self.caller)
+        with patch('core.fcm_service.send_incoming_call_fcm') as mock_send_fcm:
+            mock_send_fcm.side_effect = Exception("Simulated network timeout connecting to FCM")
+            res = self.client.post('/api/calls/request/', {'category_id': self.category.id}, format='json')
+            self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+            self.assertTrue(res.data['success'])
+            self.assertIn('call_id', res.data)
+
+    def test_firebase_status_diagnostic_safe(self):
+        from core.fcm_service import check_firebase_status
+        status = check_firebase_status()
+        self.assertIn("credentials_file_found", status)
+        self.assertIn("initialized", status)
+        self.assertTrue(status["credentials_file_found"])
+        # Ensure no private key or secrets are exposed in diagnostic output
+        status_str = str(status).lower()
+        self.assertNotIn("private_key", status_str)
+        self.assertNotIn("privatekey", status_str)
+
+
+
