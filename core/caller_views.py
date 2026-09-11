@@ -132,62 +132,87 @@ def admin_live_data_api(request: HttpRequest) -> HttpResponse:
         pending_withdrawals_count = AgentPayout.objects.filter(status='PENDING').count()
         total_payout_coins = AgentPayout.objects.filter(status__in=['APPROVED', 'COMPLETED']).aggregate(total=Sum('coins'))['total'] or 0
 
-        # Recent Calls (latest 30)
-        calls_qs = Call.objects.select_related('caller', 'receiver').order_by('-created_at')[:30]
+        # Recent Calls (latest 50)
+        calls_qs = Call.objects.select_related('caller', 'receiver').order_by('-created_at')[:50]
         recent_calls = []
         for c in calls_qs:
-            dur = "-"
-            if hasattr(c, 'duration_seconds') and c.duration_seconds:
-                dur = f"{c.duration_seconds}s"
-            elif hasattr(c, 'duration_minutes') and c.duration_minutes:
-                dur = f"{c.duration_minutes}m"
+            dur_sec = getattr(c, 'duration_seconds', 0) or 0
+            dur = f"{dur_sec}s" if dur_sec else (f"{c.duration_minutes}m" if getattr(c, 'duration_minutes', 0) else "-")
             coins = getattr(c, 'coins_spent', None) or getattr(c, 'coins_deducted', None) or getattr(c, 'coins', 0) or 0
+
+            caller_disp = 'Unknown'
+            if c.caller:
+                caller_disp = c.caller.phone_number or c.caller.username
+
+            receiver_disp = 'Unknown'
+            if c.receiver:
+                receiver_disp = c.receiver.first_name or c.receiver.username
 
             recent_calls.append({
                 'id': c.id,
-                'caller': getattr(c.caller, 'phone_number', None) or getattr(c.caller, 'username', 'Unknown') if c.caller else 'Unknown',
-                'receiver': getattr(c.receiver, 'first_name', None) or getattr(c.receiver, 'username', 'Unknown') if c.receiver else 'Unknown',
+                'caller': caller_disp,
+                'receiver': receiver_disp,
+                'call_type': getattr(c, 'call_type', 'VOICE') or 'VOICE',
                 'status': getattr(c, 'status', 'COMPLETED'),
                 'duration': dur,
+                'duration_seconds': dur_sec,
                 'coins': coins,
                 'timestamp': c.created_at.strftime('%b %d, %H:%M') if hasattr(c, 'created_at') and c.created_at else ''
             })
 
-        # Users (latest 50)
-        users_qs = User.objects.select_related('caller_profile', 'listener_profile', 'wallet').order_by('-created_at')[:50]
+        # Users (latest 100) - safely resolve OneToOne relations
+        users_qs = User.objects.select_related('caller_profile', 'listener_profile', 'wallet', 'agent_wallet').order_by('-created_at')[:100]
         users_list = []
         for u in users_qs:
             name = u.first_name or u.username
-            if hasattr(u, 'caller_profile') and u.caller_profile:
-                name = u.caller_profile.name or name
-            elif hasattr(u, 'listener_profile') and u.listener_profile:
-                name = u.listener_profile.name or name
-            bal = u.wallet.balance if hasattr(u, 'wallet') and u.wallet else 0
+            cp = getattr(u, 'caller_profile', None)
+            lp = getattr(u, 'listener_profile', None)
+            w = getattr(u, 'wallet', None)
+            aw = getattr(u, 'agent_wallet', None)
+
+            if cp and cp.name:
+                name = cp.name
+            elif lp and lp.name:
+                name = lp.name
+
+            bal = 0
+            is_earned = False
+            if aw and aw.balance:
+                bal = aw.balance
+                is_earned = True
+            elif w and w.balance:
+                bal = w.balance
+
             users_list.append({
                 'id': u.id,
                 'username': u.username,
                 'name': name,
-                'phone': u.phone_number or '-',
+                'phone': u.phone_number or '',
                 'role': u.role,
+                'is_listener': u.is_listener,
                 'coins': bal,
-                'is_active': u.is_active,
+                'is_earned': is_earned,
+                'is_verified': bool(u.is_verified),
+                'is_active': bool(u.is_active),
                 'created_at': u.created_at.strftime('%b %d, %Y') if hasattr(u, 'created_at') and u.created_at else ''
             })
 
-        # Payouts (latest 20)
-        payouts_qs = AgentPayout.objects.select_related('agent').order_by('-requested_at')[:20]
+        # Payouts (latest 30)
+        payouts_qs = AgentPayout.objects.select_related('agent').order_by('-requested_at')[:30]
         payouts_list = []
         for p in payouts_qs:
             payouts_list.append({
                 'id': p.id,
                 'agent': (p.agent.first_name or p.agent.username) if p.agent else 'Unknown',
                 'coins': p.coins,
+                'amount_inr': getattr(p, 'amount_inr', p.coins) or p.coins,
+                'method': getattr(p, 'payout_method', 'UPI') or 'UPI',
                 'status': p.status,
                 'requested_at': p.requested_at.strftime('%b %d, %H:%M') if hasattr(p, 'requested_at') and p.requested_at else ''
             })
 
-        # Transactions (latest 25)
-        tx_qs = WalletTransaction.objects.select_related('wallet__user').order_by('-created_at')[:25]
+        # Transactions (latest 30)
+        tx_qs = WalletTransaction.objects.select_related('wallet__user').order_by('-created_at')[:30]
         transactions_list = []
         for tx in tx_qs:
             username = tx.wallet.user.username if (tx.wallet and tx.wallet.user) else 'Unknown'
@@ -218,6 +243,7 @@ def admin_live_data_api(request: HttpRequest) -> HttpResponse:
             'transactions': transactions_list,
         })
     except Exception as e:
-        return JsonResponse({'success': False, 'message': str(e)}, status=500)
+        import traceback
+        return JsonResponse({'success': False, 'message': str(e), 'trace': traceback.format_exc()}, status=500)
 
 

@@ -4258,7 +4258,7 @@ class AdminListenerListView(APIView):
     permission_classes = [permissions.AllowAny]
 
     def get(self, request):
-        listeners = User.objects.filter(role='LISTENER').select_related('listener_profile').order_by('-created_at')
+        listeners = User.objects.filter(role__in=['LISTENER', 'AGENT', 'BUDDY']).select_related('listener_profile').order_by('-created_at')
         data = []
         for u in listeners:
             prof = getattr(u, 'listener_profile', None)
@@ -4985,7 +4985,7 @@ class ListenerListCreateView(APIView):
     permission_classes = [permissions.AllowAny]
 
     def get(self, request):
-        listeners = User.objects.filter(role__in=['LISTENER', 'BUDDY']).select_related('listener_profile', 'buddy_profile').order_by('-created_at')
+        listeners = User.objects.filter(role__in=['LISTENER', 'AGENT', 'BUDDY']).select_related('listener_profile', 'buddy_profile').order_by('-created_at')
 
         cat_param = (
             request.query_params.get('category') or

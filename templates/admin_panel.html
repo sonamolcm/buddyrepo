@@ -695,12 +695,13 @@
         </button>
       </li>
 
-      <!-- 4. OFFERS -->
+      <!-- 4. OFFERS (Commented out)
       <li>
         <button class="nav-btn" onclick="switchTab('offers', this)">
           <span>🎁</span> Offers
         </button>
       </li>
+      -->
 
       <!-- 5. CREATE AGENT -->
       <li>
@@ -709,12 +710,13 @@
         </button>
       </li>
 
-      <!-- 6. TASK SETTINGS -->
+      <!-- 6. TASK SETTINGS (Commented out)
       <li>
         <button class="nav-btn" onclick="switchTab('task_settings', this)">
           <span>⚙️</span> Task Settings
         </button>
       </li>
+      -->
 
       <!-- 7. WITHDRAWALS -->
       <li>
@@ -758,7 +760,7 @@
         <p id="page-subtitle-text">Platform overview, live metrics, and real-time statistics</p>
       </div>
       <div class="header-actions" style="display: flex; align-items: center; gap: 10px;">
-        <button type="button" class="btn btn-dark btn-sm" onclick="fetchLiveAdminData(true)" title="Fetch latest data immediately">
+        <button type="button" class="btn btn-dark btn-sm" id="btn-refresh-data" onclick="handleManualRefresh()" title="Fetch latest data immediately">
           <span id="sync-spinner-icon">🔄</span> Refresh
         </button>
       </div>
@@ -1526,6 +1528,10 @@
   <script>
     // Tab switching strictly for the 9 requested items
     function switchTab(tabId, btnElement) {
+      try {
+        localStorage.setItem('gabby_admin_tab', tabId);
+      } catch (e) {}
+
       document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
       document.querySelectorAll('.nav-btn').forEach(el => el.classList.remove('active'));
 
@@ -1698,7 +1704,8 @@
           showToast(`Agent '${username}' created successfully!`);
           document.getElementById('agent-provision-form').reset();
           renderLanguageTagsAndPills();
-          setTimeout(() => { switchTab('users', document.querySelectorAll('.nav-btn')[2]); }, 1200);
+          await fetchLiveAdminData(true);
+          setTimeout(() => { switchTab('users', document.querySelectorAll('.nav-btn')[2]); }, 600);
         } else {
           msgBox.style.color = '#f87171';
           msgBox.textContent = data.message || 'Error creating agent account.';
@@ -1785,15 +1792,20 @@
 
     // Filter Users Table
     function filterUsersTable() {
-      const q = document.getElementById('users-search-input').value.toLowerCase().trim();
-      const role = document.getElementById('users-role-filter').value;
+      const qInput = document.getElementById('users-search-input');
+      const rInput = document.getElementById('users-role-filter');
+      const q = qInput ? qInput.value.toLowerCase().trim() : '';
+      const role = rInput ? rInput.value : '';
       const rows = document.querySelectorAll('#users-table tbody tr');
 
       rows.forEach(row => {
         const text = row.getAttribute('data-search') || '';
         const userRole = row.getAttribute('data-role') || '';
         const matchesQ = !q || text.includes(q);
-        const matchesRole = !role || userRole === role;
+        let matchesRole = !role || userRole === role;
+        if (role === 'LISTENER' && (userRole === 'AGENT' || userRole === 'BUDDY' || userRole === 'LISTENER')) {
+          matchesRole = true;
+        }
         row.style.display = (matchesQ && matchesRole) ? '' : 'none';
       });
     }
@@ -1867,12 +1879,23 @@
       showToast('✅ Global platform settings saved successfully!');
     }
 
+    // Manual Refresh Button Handler
+    async function handleManualRefresh() {
+      const spinner = document.getElementById('sync-spinner-icon');
+      if (spinner) {
+        spinner.style.transform = 'rotate(360deg)';
+        spinner.style.transition = 'transform 0.5s ease';
+        setTimeout(() => { spinner.style.transform = ''; spinner.style.transition = ''; }, 500);
+      }
+      showToast('🔄 Refreshing live data and tables...');
+      await fetchLiveAdminData(true);
+    }
+
     // Live Data Synchronization (Auto-polls every 4 seconds)
     let lastStatsSnapshot = null;
 
     async function fetchLiveAdminData(isManual = false) {
       const spinner = document.getElementById('sync-spinner-icon');
-      const dot = document.getElementById('live-indicator-dot');
       if (spinner && isManual) {
         spinner.style.transform = 'rotate(360deg)';
         spinner.style.transition = 'transform 0.5s ease';
@@ -1881,9 +1904,15 @@
 
       try {
         const res = await fetch('/api/admin/live-data/', { cache: 'no-store' });
-        if (!res.ok) return;
+        if (!res.ok) {
+          if (isManual) showToast('Failed to fetch live admin data.', true);
+          return;
+        }
         const data = await res.json();
-        if (!data.success || !data.stats) return;
+        if (!data.success || !data.stats) {
+          if (isManual) showToast(data.message || 'Error parsing live admin data.', true);
+          return;
+        }
 
         const s = data.stats;
 
@@ -1922,7 +1951,7 @@
         }
         lastStatsSnapshot = s;
 
-        // Dynamically update dashboard recent calls preview
+        // 1. Dynamically update dashboard recent calls preview
         if (data.recent_calls && data.recent_calls.length > 0) {
           const previewBody = document.getElementById('recent-calls-preview-tbody');
           if (previewBody) {
@@ -1946,10 +1975,132 @@
           }
         }
 
-        if (dot) dot.style.background = '#16a34a';
-        if (isManual) showToast('✅ Dashboard updated with latest data!');
+        // 2. Dynamically update Users & Agents table
+        if (data.users && data.users.length > 0) {
+          const usersTbody = document.querySelector('#users-table tbody');
+          if (usersTbody) {
+            usersTbody.innerHTML = data.users.map(u => {
+              let roleBadge = '<span class="badge badge-gray">CALLER</span>';
+              if (u.role === 'ADMIN') {
+                roleBadge = '<span class="badge badge-warning">ADMIN</span>';
+              } else if (u.is_listener || u.role === 'LISTENER' || u.role === 'AGENT' || u.role === 'BUDDY') {
+                roleBadge = '<span class="badge badge-primary">AGENT / LISTENER</span>';
+              }
+
+              let coinsHtml = `<strong>🪙 ${u.coins || 0}</strong>`;
+              if (u.is_earned) {
+                coinsHtml += ' <span style="font-size: 11px; color: var(--text-muted);">(Earned)</span>';
+              }
+
+              const verifBadge = u.is_verified ?
+                '<span class="badge badge-success">Verified</span>' :
+                '<span class="badge badge-warning">Unverified</span>';
+
+              const activeBadge = u.is_active ?
+                `<span class="badge badge-success" id="user-status-badge-${u.id}">Active</span>` :
+                `<span class="badge badge-danger" id="user-status-badge-${u.id}">Blocked</span>`;
+
+              const phoneHtml = u.phone ? `<div style="font-size: 12px; color: var(--text-muted);">${u.phone}</div>` : '';
+              const searchAttr = `${(u.username||'').toLowerCase()} ${(u.phone||'').toLowerCase()} ${(u.name||'').toLowerCase()}`;
+
+              return `
+                <tr id="user-row-${u.id}" data-search="${searchAttr}" data-role="${u.role}">
+                  <td>#${u.id}</td>
+                  <td>
+                    <strong>${u.username}</strong>
+                    ${phoneHtml}
+                  </td>
+                  <td>${roleBadge}</td>
+                  <td>${coinsHtml}</td>
+                  <td>${verifBadge}</td>
+                  <td>${activeBadge}</td>
+                  <td style="color: var(--text-muted);">${u.created_at || ''}</td>
+                  <td>
+                    <div style="display: flex; gap: 6px;">
+                      <button class="btn btn-dark btn-sm" onclick="toggleUserStatus(${u.id}, '${u.username}')">
+                        Toggle Status
+                      </button>
+                      <button class="btn btn-danger btn-sm" onclick="deleteUserAccount(${u.id}, '${u.username}')">
+                        Delete
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              `;
+            }).join('');
+
+            filterUsersTable();
+          }
+        }
+
+        // 3. Dynamically update Calls table
+        if (data.recent_calls && data.recent_calls.length > 0) {
+          const callsTbody = document.querySelector('#calls-table tbody');
+          if (callsTbody) {
+            callsTbody.innerHTML = data.recent_calls.map(c => {
+              let badge = `<span class="badge badge-warning">${c.status}</span>`;
+              if (c.status === 'COMPLETED') badge = `<span class="badge badge-success">Completed</span>`;
+              else if (c.status === 'ONGOING') badge = `<span class="badge badge-primary">Ongoing</span>`;
+              else if (c.status === 'REJECTED') badge = `<span class="badge badge-danger">Rejected</span>`;
+
+              return `
+                <tr data-status="${c.status}" data-caller="${(c.caller||'').toLowerCase()}" data-agent="${(c.receiver||'').toLowerCase()}">
+                  <td>#${c.id}</td>
+                  <td><strong>${c.caller}</strong></td>
+                  <td>${c.receiver}</td>
+                  <td><span class="badge badge-primary">${c.call_type || 'VOICE'}</span></td>
+                  <td>${badge}</td>
+                  <td>${c.duration_seconds || 0} sec</td>
+                  <td><strong>🪙 ${c.coins || 0}</strong></td>
+                  <td style="color: var(--text-muted);">${c.timestamp || ''}</td>
+                </tr>
+              `;
+            }).join('');
+          }
+        }
+
+        // 4. Dynamically update Withdrawals table
+        if (data.payouts && data.payouts.length > 0) {
+          const payoutsTbody = document.querySelector('#withdrawals-table tbody');
+          if (payoutsTbody) {
+            payoutsTbody.innerHTML = data.payouts.map(p => {
+              let badge = `<span class="badge badge-warning" id="payout-badge-${p.id}">${p.status}</span>`;
+              if (p.status === 'APPROVED' || p.status === 'COMPLETED') {
+                badge = `<span class="badge badge-success" id="payout-badge-${p.id}">${p.status}</span>`;
+              } else if (p.status === 'REJECTED') {
+                badge = `<span class="badge badge-danger" id="payout-badge-${p.id}">${p.status}</span>`;
+              }
+
+              let actionHtml = '<span style="font-size: 12px; color: var(--text-muted);">Processed</span>';
+              if (p.status === 'PENDING') {
+                actionHtml = `
+                  <div style="display: flex; gap: 6px;" id="payout-actions-${p.id}">
+                    <button class="btn btn-success btn-sm" onclick="processWithdrawal(${p.id}, 'approve')">Approve</button>
+                    <button class="btn btn-danger btn-sm" onclick="processWithdrawal(${p.id}, 'reject')">Reject</button>
+                  </div>
+                `;
+              }
+
+              return `
+                <tr id="payout-row-${p.id}" data-status="${p.status}">
+                  <td>#${p.id}</td>
+                  <td><strong>${p.agent}</strong></td>
+                  <td><strong style="color: #fbbf24;">🪙 ${p.coins}</strong></td>
+                  <td>₹${p.amount_inr || p.coins}</td>
+                  <td><span class="badge badge-primary">${p.method || 'UPI'}</span></td>
+                  <td style="font-size: 12px; color: #cbd5e1;">Online / UPI</td>
+                  <td style="color: var(--text-muted);">${p.requested_at || ''}</td>
+                  <td>${badge}</td>
+                  <td>${actionHtml}</td>
+                </tr>
+              `;
+            }).join('');
+          }
+        }
+
+        if (isManual) showToast('✅ Admin panel & tables refreshed successfully!');
       } catch (err) {
-        if (dot) dot.style.background = '#eab308';
+        if (isManual) showToast('Network error during refresh.', true);
       }
     }
 
@@ -1958,8 +2109,15 @@
       fetchLiveAdminData(false);
     }, 4000);
 
-    // Initialize multi-language chips and pills on page load
+    // Initialize multi-language chips and restore active tab on load
     document.addEventListener('DOMContentLoaded', () => {
+      try {
+        const savedTab = localStorage.getItem('gabby_admin_tab');
+        if (savedTab && savedTab !== 'dashboard') {
+          const btn = document.querySelector(`.nav-btn[onclick*="${savedTab}"]`);
+          if (btn) switchTab(savedTab, btn);
+        }
+      } catch (e) {}
       renderLanguageTagsAndPills();
       fetchLiveAdminData(false);
     });
