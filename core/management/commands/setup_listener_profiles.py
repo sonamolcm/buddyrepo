@@ -181,7 +181,7 @@ class Command(BaseCommand):
             )
             prof.listener_id = uname
             if not prof.name:
-                prof.name = item["name"]
+                prof.name = item["name"] 
             if not prof.gender:
                 prof.gender = item["gender"]
             if not prof.language:

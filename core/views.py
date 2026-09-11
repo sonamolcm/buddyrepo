@@ -229,6 +229,27 @@ class CallerSignupCompleteProfileView(APIView):
     permission_classes = [permissions.AllowAny]
 
     def post(self, request):
+        # Read verification_token from 'Verification-Token' request header
+        token = (
+            request.headers.get('Verification-Token') or 
+            request.META.get('HTTP_VERIFICATION_TOKEN') or 
+            request.headers.get('verification-token') or 
+            ''
+        ).strip()
+
+        # Fallback to body verification_token if provided for backwards compatibility
+        if not token and isinstance(request.data, dict) and request.data.get('verification_token'):
+            token = str(request.data.get('verification_token')).strip()
+
+        if not token:
+            return Response({
+                "success": False,
+                "message": "Verification-Token header is required.",
+                "errors": {
+                    "verification_token": ["Verification-Token header is missing."]
+                }
+            }, status=status.HTTP_400_BAD_REQUEST)
+
         serializer = CallerSignupCompleteProfileSerializer(data=request.data)
         if not serializer.is_valid():
             return Response({
@@ -237,7 +258,6 @@ class CallerSignupCompleteProfileView(APIView):
                 "errors": serializer.errors
             }, status=status.HTTP_400_BAD_REQUEST)
 
-        token = serializer.validated_data['verification_token']
         provided_phone = (serializer.validated_data.get('phone_number') or '').strip()
 
         # Validate signed verification token and automatically extract verified phone number

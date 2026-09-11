@@ -162,11 +162,13 @@
           "request": {
             "method": "POST",
             "header": [
-              { "key": "Content-Type", "value": "application/json" }
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Verification-Token", "value": "{{verificationToken}}" },
+              { "key": "Authorization", "value": "Bearer {{token}}" }
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"verification_token\": \"{{verificationToken}}\",\n  \"name\": \"Anu\",\n  \"age\": 24,\n  \"gender\": \"Female\",\n  \"language\": \"Malayalam\",\n  \"interests\": [\"Music\", \"Movies\", \"Travel\"]\n}"
+              "raw": "{\n  \"name\": \"Anu\",\n  \"age\": 24,\n  \"gender\": \"Female\",\n  \"language\": \"Malayalam\",\n  \"interests\": [\"Music\", \"Movies\", \"Travel\"]\n}"
             },
             "url": {
               "raw": "{{baseUrl}}/auth/caller/signup/complete-profile/",

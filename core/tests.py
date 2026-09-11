@@ -655,4 +655,63 @@ class AgentDashboardTestCase(TestCase):
         self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
 
 
+class CallerSignupCompleteProfileTestCase(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        from core.otp_service import generate_verification_token
+        self.phone = "+919876543299"
+        self.valid_token = generate_verification_token(self.phone, purpose='SIGNUP')
 
+    def test_complete_profile_with_verification_token_header_success(self):
+        body = {
+            "name": "Arathy",
+            "age": 30,
+            "gender": "Female",
+            "interest": ["music", "gaming"]
+        }
+        res = self.client.post(
+            '/api/auth/caller/signup/complete-profile/',
+            data=body,
+            format='json',
+            HTTP_VERIFICATION_TOKEN=self.valid_token
+        )
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+        self.assertTrue(res.data['success'])
+        self.assertEqual(res.data['data']['user']['name'], "Arathy")
+        self.assertEqual(res.data['data']['user']['phone_number'], self.phone)
+        self.assertIn('music', res.data['data']['interests'])
+        self.assertIn('gaming', res.data['data']['interests'])
+        self.assertIn('access', res.data['data']['tokens'])
+        self.assertIn('refresh', res.data['data']['tokens'])
+
+    def test_complete_profile_missing_verification_token_header_fails(self):
+        body = {
+            "name": "Arathy",
+            "age": 30,
+            "gender": "Female",
+            "interest": ["music", "gaming"]
+        }
+        res = self.client.post(
+            '/api/auth/caller/signup/complete-profile/',
+            data=body,
+            format='json'
+        )
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(res.data['success'])
+        self.assertIn('verification_token', res.data.get('errors', {}))
+
+    def test_complete_profile_invalid_verification_token_header_fails(self):
+        body = {
+            "name": "Arathy",
+            "age": 30,
+            "gender": "Female",
+            "interest": ["music", "gaming"]
+        }
+        res = self.client.post(
+            '/api/auth/caller/signup/complete-profile/',
+            data=body,
+            format='json',
+            HTTP_VERIFICATION_TOKEN="invalid_bogus_token"
+        )
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(res.data['success'])

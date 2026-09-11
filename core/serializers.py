@@ -106,7 +106,7 @@ class CallerSignupVerifyOTPSerializer(serializers.Serializer):
 
 
 class CallerSignupCompleteProfileSerializer(serializers.Serializer):
-    verification_token = serializers.CharField(write_only=True)
+    verification_token = serializers.CharField(required=False, allow_blank=True, write_only=True, default='')
     phone_number = serializers.CharField(max_length=25, required=False, allow_blank=True, default='')
     name = serializers.CharField(max_length=100)
     age = serializers.IntegerField(min_value=13, max_value=120)
