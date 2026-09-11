@@ -76,7 +76,16 @@ class AgentAuthAndProfileTests(TestCase):
         self.assertEqual(patch_res.status_code, status.HTTP_200_OK)
         self.profile.refresh_from_db()
         self.assertEqual(self.profile.bio, 'Experienced empathetic listener and advisor.')
-        self.assertEqual(self.profile.name, 'Senior Agent John')
+        # PATCH profile with category string name (e.g. 'nurse')
+        patch_cat_res = self.client.patch('/api/agent/profile/', {
+            'category': 'nurse'
+        })
+        self.assertEqual(patch_cat_res.status_code, status.HTTP_200_OK)
+        self.profile.refresh_from_db()
+        self.assertIsNotNone(self.profile.profession)
+        self.assertEqual(self.profile.profession.name.lower(), 'nurse')
+        self.assertEqual(patch_cat_res.data['data']['profession_name'].lower(), 'nurse')
+        self.assertEqual(patch_cat_res.data['data']['category']['name'].lower(), 'nurse')
 
     def test_agent_rate_update(self):
         self.client.force_authenticate(user=self.agent_user)

@@ -1183,14 +1183,75 @@ class AgentProfileSerializer(serializers.ModelSerializer):
                 setattr(instance, field, validated_data[field])
 
         initial = getattr(self, 'initial_data', {})
-        prof_id = initial.get('profession_id') or initial.get('category_id')
-        if prof_id is not None:
-            category = Category.objects.filter(id=prof_id, is_active=True).first()
-            if category:
-                instance.profession = category
+
+        # Support category resolution from category / profession / category_id / profession_id
+        cat_input = (
+            initial.get('category')
+            if initial.get('category') is not None
+            else initial.get('profession')
+            if initial.get('profession') is not None
+            else initial.get('category_id')
+            if initial.get('category_id') is not None
+            else initial.get('profession_id')
+        )
+
+        if cat_input is not None:
+            category_obj = None
+            if isinstance(cat_input, dict):
+                cat_id = cat_input.get('id')
+                cat_name = cat_input.get('name')
+                if cat_id is not None:
+                    try:
+                        category_obj = Category.objects.filter(id=int(cat_id), is_active=True).first()
+                    except (ValueError, TypeError):
+                        pass
+                if not category_obj and cat_name:
+                    cleaned_name = str(cat_name).strip()
+                    category_obj = (
+                        Category.objects.filter(name__iexact=cleaned_name, is_active=True).first() or
+                        Category.objects.filter(name__iexact=cleaned_name).first()
+                    )
+                    if not category_obj and cleaned_name:
+                        category_obj, _ = Category.objects.get_or_create(
+                            name=cleaned_name.title(),
+                            defaults={'is_active': True}
+                        )
+            elif isinstance(cat_input, int) or (isinstance(cat_input, str) and cat_input.strip().isdigit()):
+                category_obj = (
+                    Category.objects.filter(id=int(cat_input), is_active=True).first() or
+                    Category.objects.filter(id=int(cat_input)).first()
+                )
+            elif isinstance(cat_input, str):
+                cleaned_name = cat_input.strip()
+                if cleaned_name:
+                    category_obj = (
+                        Category.objects.filter(name__iexact=cleaned_name, is_active=True).first() or
+                        Category.objects.filter(name__iexact=cleaned_name).first()
+                    )
+                    if not category_obj:
+                        category_obj, _ = Category.objects.get_or_create(
+                            name=cleaned_name.title(),
+                            defaults={'is_active': True}
+                        )
+
+            if category_obj:
+                instance.profession = category_obj
+
+        # Support display_name mapping to name if name not provided
+        if not validated_data.get('name') and initial.get('display_name'):
+            instance.name = str(initial.get('display_name')).strip()
+
+        # Support interests normalization if passed
+        if 'interests' in initial and 'interests' not in validated_data:
+            instance.interests = normalize_interests(initial.get('interests'))
+        elif 'interests' in validated_data:
+            instance.interests = normalize_interests(validated_data['interests'])
 
         if 'name' in validated_data and validated_data['name']:
             instance.user.first_name = validated_data['name']
+            instance.user.save(update_fields=['first_name'])
+        elif instance.name and instance.user:
+            instance.user.first_name = instance.name
             instance.user.save(update_fields=['first_name'])
 
         instance.save()
