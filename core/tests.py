@@ -1,7 +1,8 @@
 from django.test import TestCase
+import datetime
 from django.utils import timezone
 from django.contrib.auth import get_user_model
-from rest_framework.test import APIClient
+from rest_framework.test import APIClient, APITestCase
 from rest_framework import status
 from core.models import (
     Category,
@@ -14,10 +15,13 @@ from core.models import (
     AgentDutySession,
     AgentWallet,
     AgentEarning,
-    AgentPayout
+    AgentPayout,
+    OTPVerification,
+    ConversationCategory,
+    CALLER_NEED_OPTIONS,
 )
-
 from core.constants import ALLOWED_REVIEW_TAGS
+from core.views import get_weekly_payout_bounds
 
 User = get_user_model()
 
@@ -146,6 +150,7 @@ class AgentDutyTests(TestCase):
         self.assertEqual(on_res.status_code, status.HTTP_200_OK)
         self.assertTrue(on_res.data['is_on_duty'])
         self.profile.refresh_from_db()
+        self.agent.refresh_from_db()
         self.assertTrue(self.profile.is_on_duty)
         self.assertTrue(self.profile.is_available)
         self.assertEqual(AgentDutySession.objects.filter(agent=self.agent, ended_at__isnull=True).count(), 1)
@@ -160,6 +165,7 @@ class AgentDutyTests(TestCase):
         self.assertEqual(off_res.status_code, status.HTTP_200_OK)
         self.assertFalse(off_res.data['is_on_duty'])
         self.profile.refresh_from_db()
+        self.agent.refresh_from_db()
         self.assertFalse(self.profile.is_on_duty)
         self.assertFalse(self.profile.is_available)
         self.assertEqual(AgentDutySession.objects.filter(agent=self.agent, ended_at__isnull=True).count(), 0)
@@ -275,10 +281,26 @@ class AgentDashboardAndPayoutTests(TestCase):
         )
         self.profile, _ = ListenerProfile.objects.get_or_create(
             user=self.agent,
-            defaults={'listener_id': 'agent_dash_01', 'rate_per_second': 5}
+            defaults={'listener_id': 'agent_dash_01'}
         )
-        self.wallet, _ = AgentWallet.objects.get_or_create(agent=self.agent, defaults={'balance': 150, 'total_earned': 300})
+        self.profile.rate_per_second = 5
+        self.profile.save(update_fields=['rate_per_second'])
+        self.wallet, _ = AgentWallet.objects.get_or_create(agent=self.agent)
+        self.wallet.balance = 150
+        self.wallet.total_earned = 300
+        self.wallet.save(update_fields=['balance', 'total_earned'])
         self.client.force_authenticate(user=self.agent)
+
+        # Seed eligible completed week earnings for testing
+        comp_mon, comp_sun, _, _ = get_weekly_payout_bounds()
+        comp_dt = datetime.datetime.combine(comp_mon + datetime.timedelta(days=2), datetime.time(12, 0)).replace(tzinfo=datetime.timezone.utc)
+        earning = AgentEarning.objects.create(
+            agent=self.agent,
+            coins=150,
+            earning_type='VOICE',
+            description="Call session"
+        )
+        AgentEarning.objects.filter(id=earning.id).update(created_at=comp_dt)
 
     def test_agent_dashboard(self):
         res = self.client.get('/api/agent/dashboard/')
@@ -294,7 +316,7 @@ class AgentDashboardAndPayoutTests(TestCase):
             'coins': 50,
             'payout_method': 'UPI',
             'details': {'upi_id': 'agent@okhdfcbank'}
-        })
+        }, format='json')
         self.assertEqual(payout_res.status_code, status.HTTP_201_CREATED)
         self.wallet.refresh_from_db()
         self.assertEqual(self.wallet.balance, 100)
@@ -306,10 +328,182 @@ class AgentDashboardAndPayoutTests(TestCase):
             'coins': 500,
             'payout_method': 'UPI',
             'details': {'upi_id': 'agent@okhdfcbank'}
-        })
+        }, format='json')
         self.assertEqual(bad_res.status_code, status.HTTP_400_BAD_REQUEST)
         self.wallet.refresh_from_db()
         self.assertEqual(self.wallet.balance, 150)
+
+
+class AgentWeeklyPayoutAPITests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.agent = User.objects.create_user(
+            username="agent_weekly_01",
+            password="AgentPassword123!",
+            role="AGENT",
+            phone_number="+919876543220"
+        )
+        self.profile, _ = ListenerProfile.objects.get_or_create(
+            user=self.agent,
+            defaults={'listener_id': 'agent_weekly_01', 'rate_per_second': 5}
+        )
+        self.wallet, _ = AgentWallet.objects.get_or_create(agent=self.agent)
+        self.wallet.balance = 200
+        self.wallet.total_earned = 200
+        self.wallet.save(update_fields=['balance', 'total_earned'])
+        self.caller = User.objects.create_user(
+            username="caller_weekly_01",
+            password="CallerPassword123!",
+            role="CALLER",
+            phone_number="+919876543221"
+        )
+        self.comp_mon, self.comp_sun, self.curr_mon, self.curr_sun = get_weekly_payout_bounds()
+
+    def _create_earning(self, agent, coins, target_date):
+        dt = datetime.datetime.combine(target_date, datetime.time(14, 0)).replace(tzinfo=datetime.timezone.utc)
+        earning = AgentEarning.objects.create(
+            agent=agent,
+            coins=coins,
+            earning_type='VOICE',
+            description=f"Voice earning {coins} coins"
+        )
+        AgentEarning.objects.filter(id=earning.id).update(created_at=dt)
+        return AgentEarning.objects.get(id=earning.id)
+
+    def test_valid_weekly_payout_request_automatic_completed_week(self):
+        self.client.force_authenticate(user=self.agent)
+        # Create 100 coins of earnings in the completed week
+        earning = self._create_earning(self.agent, 100, self.comp_mon + datetime.timedelta(days=2))
+
+        res = self.client.post('/api/agent/payouts/', {
+            'payout_method': 'UPI',
+            'payout_details': {'upi_id': 'agent@okhdfcbank'}
+        }, format='json')
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+        self.assertTrue(res.data['success'])
+        payout_data = res.data['payout']
+        self.assertEqual(payout_data['coins'], 100)
+        self.assertEqual(payout_data['week_start_date'], str(self.comp_mon))
+        self.assertEqual(payout_data['week_end_date'], str(self.comp_sun))
+        self.assertEqual(payout_data['status'], 'PENDING')
+
+        # Check AgentWallet balance deducted
+        self.wallet.refresh_from_db()
+        self.assertEqual(self.wallet.balance, 100)
+        self.assertEqual(self.wallet.total_paid_out, 100)
+
+        # Check earning is linked to this payout
+        earning.refresh_from_db()
+        self.assertIsNotNone(earning.payout)
+        self.assertEqual(earning.payout.id, payout_data['id'])
+
+    def test_payout_outside_eligible_weekly_period_rejected(self):
+        self.client.force_authenticate(user=self.agent)
+        # Attempt payout for current ongoing week
+        res = self.client.post('/api/agent/payouts/', {
+            'week_start_date': str(self.curr_mon),
+            'payout_method': 'UPI'
+        })
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(res.data['success'])
+        self.assertIn("still ongoing", res.data['message'])
+
+        # Invalid start date not a Monday
+        not_monday = self.comp_mon + datetime.timedelta(days=1)
+        res2 = self.client.post('/api/agent/payouts/', {
+            'week_start_date': str(not_monday),
+            'payout_method': 'UPI'
+        })
+        self.assertEqual(res2.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("must start on a Monday", res2.data['message'])
+
+    def test_duplicate_payout_request_for_same_week_rejected(self):
+        self.client.force_authenticate(user=self.agent)
+        self._create_earning(self.agent, 80, self.comp_mon + datetime.timedelta(days=1))
+
+        # First request succeeds
+        res1 = self.client.post('/api/agent/payouts/', {'payout_method': 'UPI'})
+        self.assertEqual(res1.status_code, status.HTTP_201_CREATED)
+
+        # Second request for the same week fails
+        res2 = self.client.post('/api/agent/payouts/', {'payout_method': 'UPI'})
+        self.assertEqual(res2.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(res2.data['success'])
+        self.assertIn("already been submitted", res2.data['message'])
+
+    def test_insufficient_or_zero_eligible_earnings_rejected(self):
+        self.client.force_authenticate(user=self.agent)
+        # No earnings created for completed week
+        res = self.client.post('/api/agent/payouts/', {'payout_method': 'UPI'})
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(res.data['success'])
+        self.assertIn("No eligible unpaid earnings found", res.data['message'])
+
+    def test_earnings_below_minimum_threshold_rejected(self):
+        self.client.force_authenticate(user=self.agent)
+        # Create only 30 coins (< 50 minimum)
+        self._create_earning(self.agent, 30, self.comp_mon + datetime.timedelta(days=1))
+        res = self.client.post('/api/agent/payouts/', {'payout_method': 'UPI'})
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(res.data['success'])
+        self.assertIn("below the minimum payout threshold of 50 coins", res.data['message'])
+
+    def test_unauthorized_user_rejected(self):
+        # No auth
+        res = self.client.post('/api/agent/payouts/', {'payout_method': 'UPI'})
+        self.assertEqual(res.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_non_agent_user_rejected(self):
+        self.client.force_authenticate(user=self.caller)
+        res = self.client.post('/api/agent/payouts/', {'payout_method': 'UPI'})
+        self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_admin_payout_processing_approve_complete_reject(self):
+        self.client.force_authenticate(user=self.agent)
+        earning = self._create_earning(self.agent, 75, self.comp_mon + datetime.timedelta(days=1))
+        payout_res = self.client.post('/api/agent/payouts/', {'payout_method': 'UPI'})
+        self.assertEqual(payout_res.status_code, status.HTTP_201_CREATED)
+        payout_id = payout_res.data['payout']['id']
+
+        # Admin Approve
+        app_res = self.client.post(f'/api/admin/withdrawals/{payout_id}/action/', {'action': 'approve', 'note': 'Approved'})
+        self.assertEqual(app_res.status_code, status.HTTP_200_OK)
+        payout = AgentPayout.objects.get(id=payout_id)
+        self.assertEqual(payout.status, 'APPROVED')
+
+        # Admin Complete
+        comp_res = self.client.post(f'/api/admin/withdrawals/{payout_id}/action/', {'action': 'complete'})
+        self.assertEqual(comp_res.status_code, status.HTTP_200_OK)
+        payout.refresh_from_db()
+        self.assertEqual(payout.status, 'COMPLETED')
+
+        # Admin Reject with Refund & Earning Unlink
+        rej_res = self.client.post(f'/api/admin/withdrawals/{payout_id}/action/', {'action': 'reject', 'note': 'Bank failure'})
+        self.assertEqual(rej_res.status_code, status.HTTP_200_OK)
+        payout.refresh_from_db()
+        self.assertEqual(payout.status, 'REJECTED')
+
+        # Verify wallet refunded
+        self.wallet.refresh_from_db()
+        self.assertEqual(self.wallet.balance, 200)
+        self.assertEqual(self.wallet.total_paid_out, 0)
+
+        # Verify earning unlinked
+        earning.refresh_from_db()
+        self.assertIsNone(earning.payout)
+
+    def test_get_payouts_returns_weekly_summary(self):
+        self.client.force_authenticate(user=self.agent)
+        self._create_earning(self.agent, 120, self.comp_mon + datetime.timedelta(days=3))
+        res = self.client.get('/api/agent/payouts/')
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertTrue(res.data['success'])
+        self.assertIn('weekly_summary', res.data)
+        summary = res.data['weekly_summary']
+        self.assertEqual(summary['latest_completed_week']['week_start'], str(self.comp_mon))
+        self.assertEqual(summary['latest_completed_week']['week_end'], str(self.comp_sun))
+        self.assertEqual(summary['latest_completed_week']['eligible_coins'], 120)
+        self.assertTrue(summary['latest_completed_week']['can_request_payout'])
 
 
 class CategoryFilterAndSearchAPITests(TestCase):
@@ -400,28 +594,26 @@ class CategoryFilterAndSearchAPITests(TestCase):
 
         # Create two doctors
         u1 = User.objects.create_user(username="dr_smith", password="Pass123!Safe", role="LISTENER", first_name="Dr. Alice Smith", is_active=True)
-        ListenerProfile.objects.create(
-            user=u1,
-            listener_id="dr_smith",
-            name="Dr. Alice Smith",
-            profession=doctor_cat,
-            bio="Cardiologist and wellness guide",
-            rate_per_second=5,
-            rating=4.9,
-            total_calls=15
-        )
+        u1_profile, _ = ListenerProfile.objects.get_or_create(user=u1)
+        u1_profile.listener_id = "dr_smith"
+        u1_profile.name = "Dr. Alice Smith"
+        u1_profile.profession = doctor_cat
+        u1_profile.bio = "Cardiologist and wellness guide"
+        u1_profile.rate_per_second = 5
+        u1_profile.rating = 4.9
+        u1_profile.total_calls = 15
+        u1_profile.save()
 
         u2 = User.objects.create_user(username="dr_house", password="Pass123!Safe", role="LISTENER", first_name="Dr. Gregory House", is_active=True)
-        ListenerProfile.objects.create(
-            user=u2,
-            listener_id="dr_house",
-            name="Dr. Gregory House",
-            profession=doctor_cat,
-            bio="Diagnostic medicine and health counselor",
-            rate_per_second=10,
-            rating=5.0,
-            total_calls=40
-        )
+        u2_profile, _ = ListenerProfile.objects.get_or_create(user=u2)
+        u2_profile.listener_id = "dr_house"
+        u2_profile.name = "Dr. Gregory House"
+        u2_profile.profession = doctor_cat
+        u2_profile.bio = "Diagnostic medicine and health counselor"
+        u2_profile.rate_per_second = 10
+        u2_profile.rating = 5.0
+        u2_profile.total_calls = 40
+        u2_profile.save()
 
         # 1. Search category on search bar -> shows match count
         search_res = self.client.get('/api/categories/?search=doc')
@@ -554,7 +746,12 @@ class CoinPurchaseHistoryTests(APITestCase):
 
 class AgoraCallTokenTestCase(TestCase):
     def setUp(self):
+        from unittest.mock import patch
         self.client = APIClient()
+        self.patcher = patch('core.views.generate_agora_audio_token', return_value='mock_agora_rtc_token_xyz123')
+        self.mock_agora = self.patcher.start()
+        self.addCleanup(self.patcher.stop)
+
         self.caller = User.objects.create_user(
             username='caller_agora',
             phone_number='+919876543201',
@@ -764,15 +961,14 @@ class FCMCallNotificationTestCase(TestCase):
             role="AGENT",
             fcm_token="agent_sample_fcm_token_999"
         )
-        self.agent_profile = ListenerProfile.objects.create(
-            user=self.agent,
-            listener_id="agent_fcm_user",
-            name="Bob Agent",
-            profession=self.category,
-            is_available=True,
-            is_on_duty=True,
-            is_busy=False
-        )
+        self.agent_profile, _ = ListenerProfile.objects.get_or_create(user=self.agent)
+        self.agent_profile.listener_id = "agent_fcm_user"
+        self.agent_profile.name = "Bob Agent"
+        self.agent_profile.profession = self.category
+        self.agent_profile.is_available = True
+        self.agent_profile.is_on_duty = True
+        self.agent_profile.is_busy = False
+        self.agent_profile.save()
 
     def test_call_request_triggers_fcm_when_agent_has_token(self):
         from unittest.mock import patch
@@ -835,15 +1031,14 @@ class DirectAgentCallFlowTestCase(TestCase):
             first_name="Dr. Evelyn Stone",
             fcm_token="agent_direct_token_123"
         )
-        self.agent_profile = ListenerProfile.objects.create(
-            user=self.agent,
-            listener_id="agent_direct_test",
-            name="Dr. Evelyn Stone",
-            profession=self.category,
-            is_available=True,
-            is_on_duty=True,
-            is_busy=False
-        )
+        self.agent_profile, _ = ListenerProfile.objects.get_or_create(user=self.agent)
+        self.agent_profile.listener_id = "agent_direct_test"
+        self.agent_profile.name = "Dr. Evelyn Stone"
+        self.agent_profile.profession = self.category
+        self.agent_profile.is_available = True
+        self.agent_profile.is_on_duty = True
+        self.agent_profile.is_busy = False
+        self.agent_profile.save()
 
     def test_call_request_with_agent_user_id_success(self):
         self.client.force_authenticate(user=self.caller)
@@ -916,20 +1111,27 @@ class DirectAgentCallFlowTestCase(TestCase):
             role="LISTENER",
             first_name="Second Agent"
         )
-        ListenerProfile.objects.create(
-            user=agent2,
-            listener_id="agent_second_99",
-            name="Second Agent",
-            profession=self.category,
-            is_available=True,
-            is_on_duty=True,
-            is_busy=False
-        )
+        agent2_profile, _ = ListenerProfile.objects.get_or_create(user=agent2)
+        agent2_profile.listener_id = "agent_second_99"
+        agent2_profile.name = "Second Agent"
+        agent2_profile.profession = self.category
+        agent2_profile.is_available = True
+        agent2_profile.is_on_duty = True
+        agent2_profile.is_busy = False
+        agent2_profile.save()
 
-        # Mark targeted agent busy
-        self.agent_profile.is_busy = True
-        self.agent_profile.is_available = False
-        self.agent_profile.save(update_fields=['is_busy', 'is_available'])
+        # Create real active call for targeted agent with another user
+        other_caller = User.objects.create_user(
+            username="other_caller_busy_test",
+            phone_number="+919876543289",
+            role="CALLER"
+        )
+        Call.objects.create(
+            caller=other_caller,
+            receiver=self.agent,
+            channel_name="active_busy_channel_test_99",
+            status='ACTIVE'
+        )
 
         initial_call_count = Call.objects.count()
         self.client.force_authenticate(user=self.caller)
@@ -938,7 +1140,7 @@ class DirectAgentCallFlowTestCase(TestCase):
         self.assertFalse(res.data['success'])
         self.assertIn("unavailable or busy", res.data['message'])
 
-        # Confirm NO call was created and agent2 was NOT assigned
+        # Confirm NO new call was created and agent2 was NOT assigned
         self.assertEqual(Call.objects.count(), initial_call_count)
 
     def test_call_request_off_duty_agent_returns_400(self):
@@ -980,6 +1182,29 @@ class DirectAgentCallFlowTestCase(TestCase):
 
         call2 = Call.objects.get(id=call2_id)
         self.assertEqual(call2.status, 'RINGING')
+
+        # Verify consecutive calls receive distinct, unique channel names
+        self.assertNotEqual(call1.channel_name, call2.channel_name)
+        self.assertNotEqual(res1.data['channel_name'], res2.data['channel_name'])
+
+    def test_rapid_consecutive_call_requests_produce_unique_channel_names(self):
+        self.client.force_authenticate(user=self.caller)
+        res1 = self.client.post('/api/calls/request/', {'agent_user_id': self.agent.id}, format='json')
+        self.assertEqual(res1.status_code, status.HTTP_201_CREATED)
+        call1 = Call.objects.get(id=res1.data['call_id'])
+        call1.status = 'COMPLETED'
+        call1.save(update_fields=['status'])
+
+        # Rapidly create another call to the same agent
+        res2 = self.client.post('/api/calls/request/', {'agent_user_id': self.agent.id}, format='json')
+        self.assertEqual(res2.status_code, status.HTTP_201_CREATED)
+        call2 = Call.objects.get(id=res2.data['call_id'])
+
+        self.assertNotEqual(call1.channel_name, call2.channel_name)
+        self.assertNotEqual(res1.data['channel_name'], res2.data['channel_name'])
+        # Verify format starts with call_ and ends with 8-char hex
+        self.assertTrue(call1.channel_name.startswith('call_'))
+        self.assertTrue(call2.channel_name.startswith('call_'))
 
     def test_ongoing_active_call_prevents_new_call(self):
         self.client.force_authenticate(user=self.caller)
@@ -1027,15 +1252,14 @@ class CallReviewAPITestCase(TestCase):
             role="LISTENER",
             first_name="Dr. Neil Patel"
         )
-        self.agent_profile = ListenerProfile.objects.create(
-            user=self.agent,
-            listener_id="agent_reviewee",
-            name="Dr. Neil Patel",
-            profession=self.category,
-            is_available=True,
-            is_on_duty=True,
-            rating=5.00
-        )
+        self.agent_profile, _ = ListenerProfile.objects.get_or_create(user=self.agent)
+        self.agent_profile.listener_id = "agent_reviewee"
+        self.agent_profile.name = "Dr. Neil Patel"
+        self.agent_profile.profession = self.category
+        self.agent_profile.is_available = True
+        self.agent_profile.is_on_duty = True
+        self.agent_profile.rating = 5.00
+        self.agent_profile.save()
         self.call = Call.objects.create(
             caller=self.caller,
             receiver=self.agent,
@@ -1294,6 +1518,779 @@ class CallReviewAPITestCase(TestCase):
         self.assertEqual(res.data['message'], "Review tags retrieved successfully.")
         self.assertEqual(res.data['data'], ALLOWED_REVIEW_TAGS)
         self.assertEqual(len(res.data['data']), 8)
+
+
+class AgentAvailabilityAndCallingLogicTestCase(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.category = Category.objects.create(name="Mental Health", is_active=True)
+        self.caller = User.objects.create_user(
+            username="caller_avail_1",
+            phone_number="+919876543501",
+            role="CALLER",
+            first_name="Alice"
+        )
+        self.caller2 = User.objects.create_user(
+            username="caller_avail_2",
+            phone_number="+919876543502",
+            role="CALLER",
+            first_name="Bob"
+        )
+        self.agent1 = User.objects.create_user(
+            username="agent_avail_1",
+            phone_number="+919876543503",
+            role="LISTENER",
+            first_name="Agent One"
+        )
+        self.profile1, _ = ListenerProfile.objects.get_or_create(
+            user=self.agent1,
+            defaults={
+                'listener_id': "agent_avail_1",
+                'name': "Agent One",
+                'profession': self.category,
+                'is_available': True,
+                'is_on_duty': True,
+                'is_busy': False
+            }
+        )
+        self.profile1.listener_id = "agent_avail_1"
+        self.profile1.name = "Agent One"
+        self.profile1.profession = self.category
+        self.profile1.is_available = True
+        self.profile1.is_on_duty = True
+        self.profile1.is_busy = False
+        self.profile1.save()
+
+        self.agent2 = User.objects.create_user(
+            username="agent_avail_2",
+            phone_number="+919876543504",
+            role="LISTENER",
+            first_name="Agent Two"
+        )
+        self.profile2, _ = ListenerProfile.objects.get_or_create(
+            user=self.agent2,
+            defaults={
+                'listener_id': "agent_avail_2",
+                'name': "Agent Two",
+                'profession': self.category,
+                'is_available': True,
+                'is_on_duty': True,
+                'is_busy': False
+            }
+        )
+        self.profile2.listener_id = "agent_avail_2"
+        self.profile2.name = "Agent Two"
+        self.profile2.profession = self.category
+        self.profile2.is_available = True
+        self.profile2.is_on_duty = True
+        self.profile2.is_busy = False
+        self.profile2.save()
+
+    def test_available_agent_on_duty_can_receive_call(self):
+        self.client.force_authenticate(user=self.caller)
+        res = self.client.post('/api/calls/request/', {'agent_user_id': self.agent1.id}, format='json')
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+        self.assertTrue(res.data['success'])
+        self.assertEqual(res.data['agent']['id'], self.agent1.id)
+        self.assertEqual(res.data['status'], 'RINGING')
+
+    def test_ringing_active_call_blocks_agent(self):
+        Call.objects.create(
+            caller=self.caller2,
+            receiver=self.agent1,
+            channel_name="chan_ringing_01",
+            status='RINGING'
+        )
+        self.client.force_authenticate(user=self.caller)
+        res = self.client.post('/api/calls/request/', {'agent_user_id': self.agent1.id}, format='json')
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(res.data['success'])
+        self.assertIn("unavailable or busy", res.data['message'])
+
+    def test_accepted_active_call_blocks_agent(self):
+        Call.objects.create(
+            caller=self.caller2,
+            receiver=self.agent1,
+            channel_name="chan_accepted_01",
+            status='ACCEPTED'
+        )
+        self.client.force_authenticate(user=self.caller)
+        res = self.client.post('/api/calls/request/', {'agent_user_id': self.agent1.id}, format='json')
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(res.data['success'])
+        self.assertIn("unavailable or busy", res.data['message'])
+
+    def test_active_call_blocks_agent(self):
+        Call.objects.create(
+            caller=self.caller2,
+            receiver=self.agent1,
+            channel_name="chan_active_01",
+            status='ACTIVE'
+        )
+        self.client.force_authenticate(user=self.caller)
+        res = self.client.post('/api/calls/request/', {'agent_user_id': self.agent1.id}, format='json')
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(res.data['success'])
+        self.assertIn("unavailable or busy", res.data['message'])
+
+    def test_ended_call_does_not_block_agent(self):
+        Call.objects.create(
+            caller=self.caller2,
+            receiver=self.agent1,
+            channel_name="chan_ended_01",
+            status='ENDED',
+            ended_at=timezone.now()
+        )
+        self.client.force_authenticate(user=self.caller)
+        res = self.client.post('/api/calls/request/', {'agent_user_id': self.agent1.id}, format='json')
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+        self.assertTrue(res.data['success'])
+        self.assertEqual(res.data['agent']['id'], self.agent1.id)
+
+    def test_completed_call_does_not_block_agent(self):
+        Call.objects.create(
+            caller=self.caller2,
+            receiver=self.agent1,
+            channel_name="chan_completed_01",
+            status='COMPLETED',
+            ended_at=timezone.now()
+        )
+        self.client.force_authenticate(user=self.caller)
+        res = self.client.post('/api/calls/request/', {'agent_user_id': self.agent1.id}, format='json')
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+        self.assertTrue(res.data['success'])
+        self.assertEqual(res.data['agent']['id'], self.agent1.id)
+
+    def test_rejected_call_does_not_block_agent(self):
+        Call.objects.create(
+            caller=self.caller2,
+            receiver=self.agent1,
+            channel_name="chan_rejected_01",
+            status='REJECTED',
+            rejected_at=timezone.now()
+        )
+        self.client.force_authenticate(user=self.caller)
+        res = self.client.post('/api/calls/request/', {'agent_user_id': self.agent1.id}, format='json')
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+        self.assertTrue(res.data['success'])
+        self.assertEqual(res.data['agent']['id'], self.agent1.id)
+
+    def test_cancelled_call_does_not_block_agent(self):
+        Call.objects.create(
+            caller=self.caller2,
+            receiver=self.agent1,
+            channel_name="chan_cancelled_01",
+            status='CANCELLED',
+            ended_at=timezone.now()
+        )
+        self.client.force_authenticate(user=self.caller)
+        res = self.client.post('/api/calls/request/', {'agent_user_id': self.agent1.id}, format='json')
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+        self.assertTrue(res.data['success'])
+        self.assertEqual(res.data['agent']['id'], self.agent1.id)
+
+    def test_missed_call_does_not_block_agent(self):
+        Call.objects.create(
+            caller=self.caller2,
+            receiver=self.agent1,
+            channel_name="chan_missed_01",
+            status='MISSED',
+            ended_at=timezone.now()
+        )
+        self.client.force_authenticate(user=self.caller)
+        res = self.client.post('/api/calls/request/', {'agent_user_id': self.agent1.id}, format='json')
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+        self.assertTrue(res.data['success'])
+        self.assertEqual(res.data['agent']['id'], self.agent1.id)
+
+    def test_off_duty_agent_is_rejected(self):
+        self.profile1.is_on_duty = False
+        self.profile1.save(update_fields=['is_on_duty'])
+        self.client.force_authenticate(user=self.caller)
+        res = self.client.post('/api/calls/request/', {'agent_user_id': self.agent1.id}, format='json')
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(res.data['success'])
+        self.assertIn("unavailable or busy", res.data['message'])
+
+    def test_inactive_agent_is_rejected(self):
+        self.agent1.is_active = False
+        self.agent1.save(update_fields=['is_active'])
+        self.client.force_authenticate(user=self.caller)
+        res = self.client.post('/api/calls/request/', {'agent_user_id': self.agent1.id}, format='json')
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(res.data['success'])
+        self.assertIn("inactive", res.data['message'])
+
+    def test_changing_agent_user_id_routes_to_selected_agent(self):
+        self.client.force_authenticate(user=self.caller)
+        # Call agent1
+        res1 = self.client.post('/api/calls/request/', {'agent_user_id': self.agent1.id}, format='json')
+        self.assertEqual(res1.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(res1.data['agent']['id'], self.agent1.id)
+
+        # Release first call
+        call1 = Call.objects.get(id=res1.data['call_id'])
+        call1.status = 'COMPLETED'
+        call1.save(update_fields=['status'])
+
+        # Now change agent_user_id to agent2
+        res2 = self.client.post('/api/calls/request/', {'agent_user_id': self.agent2.id}, format='json')
+        self.assertEqual(res2.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(res2.data['agent']['id'], self.agent2.id)
+
+    def test_no_silent_replacement_when_selected_agent_busy(self):
+        # agent1 has an active call
+        Call.objects.create(
+            caller=self.caller2,
+            receiver=self.agent1,
+            channel_name="chan_active_nosilent",
+            status='ACTIVE'
+        )
+        self.client.force_authenticate(user=self.caller)
+        # Caller selects agent1 specifically
+        res = self.client.post('/api/calls/request/', {'agent_user_id': self.agent1.id}, format='json')
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(res.data['success'])
+        self.assertIn("unavailable or busy", res.data['message'])
+        # Ensure agent2 was NOT called
+        self.assertFalse(Call.objects.filter(caller=self.caller, receiver=self.agent2).exists())
+
+    def test_stale_is_busy_true_with_no_active_call_self_heals(self):
+        # Simulate stale DB flag
+        self.profile1.is_busy = True
+        self.profile1.is_available = False
+        self.profile1.save(update_fields=['is_busy', 'is_available'])
+
+        self.client.force_authenticate(user=self.caller)
+        res = self.client.post('/api/calls/request/', {'agent_user_id': self.agent1.id}, format='json')
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+        self.assertTrue(res.data['success'])
+        self.assertEqual(res.data['agent']['id'], self.agent1.id)
+
+    def test_stale_is_available_false_with_no_active_call_self_heals(self):
+        # Simulate stale is_available=False while on duty
+        self.profile1.is_busy = False
+        self.profile1.is_available = False
+        self.profile1.save(update_fields=['is_busy', 'is_available'])
+
+        self.client.force_authenticate(user=self.caller)
+        res = self.client.post('/api/calls/request/', {'agent_user_id': self.agent1.id}, format='json')
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+        self.assertTrue(res.data['success'])
+        self.assertEqual(res.data['agent']['id'], self.agent1.id)
+
+    def test_duty_on_clears_stale_busy_state(self):
+        # Stale is_busy=True
+        self.profile1.is_busy = True
+        self.profile1.is_on_duty = False
+        self.profile1.is_available = False
+        self.profile1.save(update_fields=['is_busy', 'is_on_duty', 'is_available'])
+
+        self.client.force_authenticate(user=self.agent1)
+        res = self.client.post('/api/agent/duty/on/', format='json')
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertTrue(res.data['is_on_duty'])
+
+        self.profile1.refresh_from_db()
+        self.assertTrue(self.profile1.is_on_duty)
+        self.assertTrue(self.profile1.is_available)
+        self.assertFalse(self.profile1.is_busy)
+
+
+class CallerPhoneLoginTestCase(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.caller_phone = "+919876543101"
+        self.caller = User.objects.create_user(
+            username=self.caller_phone,
+            phone_number=self.caller_phone,
+            role="CALLER",
+            first_name="TestCaller",
+            is_active=True,
+            is_verified=True
+        )
+        self.caller_profile, _ = CallerProfile.objects.get_or_create(
+            user=self.caller,
+            defaults={'name': 'TestCaller', 'age': 25}
+        )
+        self.caller_profile.name = "TestCaller"
+        self.caller_profile.age = 25
+        self.caller_profile.save(update_fields=['name', 'age'])
+
+        self.listener_phone = "+919876543106"
+        self.listener = User.objects.create_user(
+            username="listener_user_login_test",
+            phone_number=self.listener_phone,
+            role="LISTENER",
+            first_name="TestListener",
+            is_active=True,
+            is_verified=True
+        )
+        self.listener_profile, _ = ListenerProfile.objects.get_or_create(
+            user=self.listener,
+            defaults={'listener_id': "listener_user_login_test", 'name': "TestListener"}
+        )
+
+    def test_1_existing_caller_can_request_login_otp(self):
+        res = self.client.post('/api/auth/caller/login/send-otp/', {'phone_number': self.caller_phone}, format='json')
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertTrue(res.data['success'])
+        self.assertIn('otp', res.data['data'])
+        self.assertEqual(res.data['data']['phone_number'], self.caller_phone)
+
+    def test_2_new_unregistered_phone_gets_404(self):
+        unregistered = "+919876543102"
+        res = self.client.post('/api/auth/caller/login/send-otp/', {'phone_number': unregistered}, format='json')
+        self.assertEqual(res.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertFalse(res.data['success'])
+        self.assertFalse(res.data['is_registered'])
+        self.assertEqual(res.data['action'], "NAVIGATE_TO_SIGNUP")
+
+    def test_3_new_unregistered_phone_does_not_create_user(self):
+        unregistered = "+919876543103"
+        self.assertFalse(User.objects.filter(phone_number=unregistered).exists())
+        self.client.post('/api/auth/caller/login/send-otp/', {'phone_number': unregistered}, format='json')
+        self.assertFalse(User.objects.filter(phone_number=unregistered).exists())
+
+    def test_4_new_unregistered_phone_does_not_create_caller_profile(self):
+        unregistered = "+919876543104"
+        self.assertFalse(CallerProfile.objects.filter(user__phone_number=unregistered).exists())
+        self.client.post('/api/auth/caller/login/send-otp/', {'phone_number': unregistered}, format='json')
+        self.assertFalse(CallerProfile.objects.filter(user__phone_number=unregistered).exists())
+
+    def test_5_new_unregistered_phone_does_not_create_otp_verification(self):
+        unregistered = "+919876543105"
+        self.assertFalse(OTPVerification.objects.filter(phone_number=unregistered).exists())
+        self.client.post('/api/auth/caller/login/send-otp/', {'phone_number': unregistered}, format='json')
+        self.assertFalse(OTPVerification.objects.filter(phone_number=unregistered).exists())
+
+    def test_6_agent_listener_phone_cannot_use_caller_login(self):
+        res = self.client.post('/api/auth/caller/login/send-otp/', {'phone_number': self.listener_phone}, format='json')
+        self.assertEqual(res.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertFalse(res.data['success'])
+        self.assertFalse(res.data['is_registered'])
+
+    def test_7_agent_listener_role_is_not_changed_to_caller(self):
+        self.client.post('/api/auth/caller/login/send-otp/', {'phone_number': self.listener_phone}, format='json')
+        self.listener.refresh_from_db()
+        self.assertEqual(self.listener.role, "LISTENER")
+
+    def test_8_inactive_caller_receives_403(self):
+        self.caller.is_active = False
+        self.caller.save(update_fields=['is_active'])
+        res = self.client.post('/api/auth/caller/login/send-otp/', {'phone_number': self.caller_phone}, format='json')
+        self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertFalse(res.data['success'])
+        self.assertIn("deactivated", res.data['message'])
+
+    def test_9_existing_caller_can_continue_through_otp_verification(self):
+        send_res = self.client.post('/api/auth/caller/login/send-otp/', {'phone_number': self.caller_phone}, format='json')
+        self.assertEqual(send_res.status_code, status.HTTP_200_OK)
+        otp = send_res.data['data']['otp']
+
+        verify_res = self.client.post('/api/auth/caller/login/verify-otp/', {
+            'phone_number': self.caller_phone,
+            'otp': otp
+        }, format='json')
+        self.assertEqual(verify_res.status_code, status.HTTP_200_OK)
+        self.assertTrue(verify_res.data['success'])
+        self.assertIn('tokens', verify_res.data['data'])
+        self.assertIn('access', verify_res.data['data']['tokens'])
+
+    def test_10_unified_caller_login_follows_same_rules(self):
+        unregistered = "+919876543110"
+        res_fail = self.client.post('/api/auth/caller/login/', {'phone_number': unregistered}, format='json')
+        self.assertEqual(res_fail.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertFalse(res_fail.data['is_registered'])
+
+        res_ok = self.client.post('/api/auth/caller/login/', {'phone_number': self.caller_phone}, format='json')
+        self.assertEqual(res_ok.status_code, status.HTTP_200_OK)
+        self.assertTrue(res_ok.data['success'])
+
+    def test_11_caller_signup_with_new_phone_still_works(self):
+        new_phone = "+919876543111"
+        res = self.client.post('/api/auth/caller/signup/send-otp/', {'phone_number': new_phone}, format='json')
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertTrue(res.data['success'])
+        self.assertIn('otp', res.data['data'])
+
+
+class CallerAgeValidationTestCase(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        from core.otp_service import generate_verification_token
+        self.signup_phone = "+919876543222"
+        self.valid_token = generate_verification_token(self.signup_phone, purpose='SIGNUP')
+
+        self.caller_phone = "+919876543223"
+        self.caller = User.objects.create_user(
+            username=self.caller_phone,
+            phone_number=self.caller_phone,
+            role="CALLER",
+            first_name="AgeUser",
+            is_active=True,
+            is_verified=True
+        )
+        self.profile, _ = CallerProfile.objects.get_or_create(
+            user=self.caller,
+            defaults={'name': 'AgeUser', 'age': 20}
+        )
+        self.profile.name = "AgeUser"
+        self.profile.age = 20
+        self.profile.save(update_fields=['name', 'age'])
+
+    def _post_signup_profile(self, age):
+        body = {
+            "name": "TestAge",
+            "age": age,
+            "gender": "Female",
+            "interest": ["music"]
+        }
+        return self.client.post(
+            '/api/auth/caller/signup/complete-profile/',
+            data=body,
+            format='json',
+            HTTP_VERIFICATION_TOKEN=self.valid_token
+        )
+
+    def test_12_age_10_accepted(self):
+        res = self._post_signup_profile(10)
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(res.data['data']['user']['age'], 10)
+
+    def test_13_age_30_accepted(self):
+        res = self._post_signup_profile(30)
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(res.data['data']['user']['age'], 30)
+
+    def test_14_age_99_accepted(self):
+        res = self._post_signup_profile(99)
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(res.data['data']['user']['age'], 99)
+
+    def test_15_age_3_rejected(self):
+        res = self._post_signup_profile(3)
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('age', res.data.get('errors', {}))
+
+    def test_16_age_9_rejected(self):
+        res = self._post_signup_profile(9)
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('age', res.data.get('errors', {}))
+
+    def test_17_age_100_rejected(self):
+        res = self._post_signup_profile(100)
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('age', res.data.get('errors', {}))
+
+    def test_18_age_123_rejected(self):
+        res = self._post_signup_profile(123)
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('age', res.data.get('errors', {}))
+
+    def test_19_non_numeric_age_rejected(self):
+        res = self._post_signup_profile("abc")
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('age', res.data.get('errors', {}))
+
+    def test_20_profile_update_cannot_bypass_validation(self):
+        self.client.force_authenticate(user=self.caller)
+        # Attempt age 100 on profile update
+        res_100 = self.client.patch('/api/caller/profile/', {'age': 100}, format='json')
+        self.assertEqual(res_100.status_code, status.HTTP_400_BAD_REQUEST)
+
+        # Attempt age 9 on profile update
+        res_9 = self.client.patch('/api/caller/profile/', {'age': 9}, format='json')
+        self.assertEqual(res_9.status_code, status.HTTP_400_BAD_REQUEST)
+
+        # Valid 2-digit age 45 succeeds
+        res_valid = self.client.patch('/api/caller/profile/', {'age': 45}, format='json')
+        self.assertEqual(res_valid.status_code, status.HTTP_200_OK)
+        self.profile.refresh_from_db()
+        self.assertEqual(self.profile.age, 45)
+
+    def test_21_direct_caller_age_endpoints_cannot_bypass_validation(self):
+        self.client.force_authenticate(user=self.caller)
+        # 1. WebAboutYouView
+        res_web_bad = self.client.post('/api/auth/about-you/', {'age': 105}, format='json')
+        self.assertEqual(res_web_bad.status_code, status.HTTP_400_BAD_REQUEST)
+        res_web_ok = self.client.post('/api/auth/about-you/', {'age': 22}, format='json')
+        self.assertEqual(res_web_ok.status_code, status.HTTP_200_OK)
+
+        # 2. CallerListCreateView
+        res_create_bad = self.client.post('/api/callers/', {'phone_number': '+919876543999', 'age': 5}, format='json')
+        self.assertEqual(res_create_bad.status_code, status.HTTP_400_BAD_REQUEST)
+
+        # 3. CallerUpdateView
+        res_update_bad = self.client.patch('/api/caller/update/', {'phone_number': self.caller_phone, 'age': 120}, format='json')
+        self.assertEqual(res_update_bad.status_code, status.HTTP_400_BAD_REQUEST)
+
+
+class ConversationCategoriesAndCallerNeedsTestCase(TestCase):
+    def setUp(self):
+        from django.core.management import call_command
+        self.client = APIClient()
+
+        # Seed the 9 conversation categories
+        call_command('seed_conversation_categories')
+
+        # Caller user
+        self.caller_phone = "+919876544001"
+        self.caller = User.objects.create_user(
+            username="caller_cc_test",
+            phone_number=self.caller_phone,
+            role="CALLER",
+            first_name="Alice Caller",
+            is_active=True
+        )
+        self.caller_profile, _ = CallerProfile.objects.get_or_create(user=self.caller)
+
+        # Agent 1 (Just Talk + Career)
+        self.agent1_phone = "+919876544002"
+        self.agent1 = User.objects.create_user(
+            username="agent_cc_1",
+            phone_number=self.agent1_phone,
+            role="AGENT",
+            first_name="Agent Alpha",
+            is_active=True
+        )
+        self.profile1, _ = ListenerProfile.objects.get_or_create(user=self.agent1)
+        self.profile1.is_on_duty = True
+        self.profile1.is_available = True
+        self.profile1.is_busy = False
+        self.profile1.save()
+
+        # Agent 2 (Advice + Student Companion)
+        self.agent2_phone = "+919876544003"
+        self.agent2 = User.objects.create_user(
+            username="agent_cc_2",
+            phone_number=self.agent2_phone,
+            role="LISTENER",
+            first_name="Agent Beta",
+            is_active=True
+        )
+        self.profile2, _ = ListenerProfile.objects.get_or_create(user=self.agent2)
+        self.profile2.is_on_duty = True
+        self.profile2.is_available = True
+        self.profile2.is_busy = False
+        self.profile2.save()
+
+        self.just_talk = ConversationCategory.objects.get(name="Just Talk")
+        self.advice = ConversationCategory.objects.get(name="Advice")
+        self.career = ConversationCategory.objects.get(name="Career")
+
+        self.profile1.conversation_categories.set([self.just_talk, self.career])
+        self.profile2.conversation_categories.set([self.advice])
+
+    def test_1_conversation_categories_endpoint_returns_9_active_categories(self):
+        res = self.client.get('/api/conversation-categories/')
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertTrue(res.data['success'])
+        self.assertEqual(len(res.data['data']), 9)
+        names = [item['name'] for item in res.data['data']]
+        self.assertIn("Just Talk", names)
+        self.assertIn("Friendly Conversation", names)
+        self.assertIn("Advice", names)
+        self.assertIn("Casual", names)
+
+    def test_2_inactive_category_is_not_returned(self):
+        self.just_talk.is_active = False
+        self.just_talk.save(update_fields=['is_active'])
+
+        res = self.client.get('/api/conversation-categories/')
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        names = [item['name'] for item in res.data['data']]
+        self.assertNotIn("Just Talk", names)
+        self.assertEqual(len(res.data['data']), 8)
+
+    def test_3_caller_needs_endpoint_returns_8_options(self):
+        self.client.force_authenticate(user=self.caller)
+        res = self.client.get('/api/caller/needs/')
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertTrue(res.data['success'])
+        self.assertEqual(len(res.data['data']), 8)
+        values = [item['value'] for item in res.data['data']]
+        self.assertIn("someone_to_listen", values)
+        self.assertIn("im_lonely", values)
+        self.assertIn("im_bored", values)
+
+    def test_4_unauthenticated_access_is_rejected_where_appropriate(self):
+        # Unauthenticated access to /api/caller/needs/ should be rejected (401)
+        res_unauth = self.client.get('/api/caller/needs/')
+        self.assertEqual(res_unauth.status_code, status.HTTP_401_UNAUTHORIZED)
+
+        # Agent accessing caller needs is forbidden (403)
+        self.client.force_authenticate(user=self.agent1)
+        res_agent = self.client.get('/api/caller/needs/')
+        self.assertEqual(res_agent.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_5_caller_can_save_valid_current_need(self):
+        self.client.force_authenticate(user=self.caller)
+        res = self.client.patch('/api/caller/profile/', {'current_need': 'someone_to_listen'}, format='json')
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.caller_profile.refresh_from_db()
+        self.assertEqual(self.caller_profile.current_need, 'someone_to_listen')
+
+        # Also accepts label directly
+        res2 = self.client.patch('/api/caller/profile/', {'current_need': "I'm lonely"}, format='json')
+        self.assertEqual(res2.status_code, status.HTTP_200_OK)
+        self.caller_profile.refresh_from_db()
+        self.assertEqual(self.caller_profile.current_need, 'im_lonely')
+
+    def test_6_invalid_current_need_is_rejected(self):
+        self.client.force_authenticate(user=self.caller)
+        res = self.client.patch('/api/caller/profile/', {'current_need': 'invalid_random_need_xyz'}, format='json')
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('current_need', res.data)
+
+    def test_7_agent_can_select_multiple_conversation_categories(self):
+        self.client.force_authenticate(user=self.agent1)
+        payload = {
+            'conversation_category_ids': [self.just_talk.id, self.advice.id, self.career.id]
+        }
+        res = self.client.patch('/api/agent/profile/', payload, format='json')
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.profile1.refresh_from_db()
+        agent_cat_ids = list(self.profile1.conversation_categories.values_list('id', flat=True))
+        self.assertIn(self.just_talk.id, agent_cat_ids)
+        self.assertIn(self.advice.id, agent_cat_ids)
+        self.assertIn(self.career.id, agent_cat_ids)
+        self.assertEqual(len(agent_cat_ids), 3)
+
+    def test_8_agent_can_clear_categories(self):
+        self.client.force_authenticate(user=self.agent1)
+        res = self.client.patch('/api/agent/profile/', {'conversation_category_ids': []}, format='json')
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.profile1.refresh_from_db()
+        self.assertEqual(self.profile1.conversation_categories.count(), 0)
+
+    def test_9_inactive_category_cannot_be_selected(self):
+        inactive_cat = ConversationCategory.objects.create(
+            name="Inactive Special",
+            is_active=False
+        )
+        self.client.force_authenticate(user=self.agent1)
+        res = self.client.patch('/api/agent/profile/', {'conversation_category_ids': [inactive_cat.id]}, format='json')
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('conversation_category_ids', res.data.get('errors', res.data))
+
+    def test_10_category_agent_filtering_returns_only_matching_agents(self):
+        # Just Talk has agent1, not agent2
+        res = self.client.get(f'/api/conversation-categories/{self.just_talk.id}/agents/')
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertTrue(res.data['success'])
+        agent_ids = [a['id'] for a in res.data['data']]
+        self.assertIn(self.agent1.id, agent_ids)
+        self.assertNotIn(self.agent2.id, agent_ids)
+
+        # Advice has agent2, not agent1
+        res_advice = self.client.get(f'/api/conversation-categories/{self.advice.id}/agents/')
+        self.assertEqual(res_advice.status_code, status.HTTP_200_OK)
+        advice_ids = [a['id'] for a in res_advice.data['data']]
+        self.assertIn(self.agent2.id, advice_ids)
+        self.assertNotIn(self.agent1.id, advice_ids)
+
+    def test_11_unavailable_busy_offduty_agents_are_excluded_when_available_only_true(self):
+        # agent1 is on duty and available -> included
+        res1 = self.client.get(f'/api/conversation-categories/{self.just_talk.id}/agents/?available_only=true')
+        self.assertEqual(res1.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(res1.data['data']), 1)
+        self.assertEqual(res1.data['data'][0]['id'], self.agent1.id)
+
+        # Case A: agent1 goes off duty
+        self.profile1.is_on_duty = False
+        self.profile1.save(update_fields=['is_on_duty'])
+        res_offduty = self.client.get(f'/api/conversation-categories/{self.just_talk.id}/agents/?available_only=true')
+        self.assertEqual(res_offduty.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(res_offduty.data['data']), 0)
+
+        # Case B: agent1 is on duty but in an active call
+        self.profile1.is_on_duty = True
+        self.profile1.save(update_fields=['is_on_duty'])
+        Call.objects.create(
+            caller=self.caller,
+            receiver=self.agent1,
+            channel_name="chan_active_test_avail_filter",
+            status='ACTIVE'
+        )
+        res_busy = self.client.get(f'/api/conversation-categories/{self.just_talk.id}/agents/?available_only=true')
+        self.assertEqual(res_busy.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(res_busy.data['data']), 0)
+
+    def test_12_no_matching_agents_returns_http_200_with_empty_data(self):
+        travel_cat = ConversationCategory.objects.get(name="Travel")
+        res = self.client.get(f'/api/conversation-categories/{travel_cat.id}/agents/')
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertTrue(res.data['success'])
+        self.assertEqual(res.data['count'], 0)
+        self.assertEqual(res.data['data'], [])
+
+    def test_13_existing_profession_filtering_still_works_independently(self):
+        # Legacy profession category
+        doctor_cat, _ = Category.objects.get_or_create(name="Doctor", defaults={'is_active': True})
+        self.profile1.profession = doctor_cat
+        self.profile1.save(update_fields=['profession'])
+
+        # Legacy endpoint filters by profession
+        res = self.client.get(f'/api/listeners/?category={doctor_cat.id}')
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        listener_ids = [l['id'] for l in res.data['data']]
+        self.assertIn(self.agent1.id, listener_ids)
+
+        # Conversation categories remain independent
+        self.assertEqual(self.profile1.profession.name, "Doctor")
+        self.assertTrue(self.profile1.conversation_categories.filter(id=self.just_talk.id).exists())
+
+    def test_14_direct_agent_call_still_uses_exact_agent_user_id(self):
+        self.client.force_authenticate(user=self.caller)
+        res = self.client.post('/api/calls/request/', {'agent_user_id': self.agent1.id}, format='json')
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(res.data['agent']['id'], self.agent1.id)
+
+        # Create a second caller
+        caller2 = User.objects.create_user(
+            username="caller2_cc_test",
+            phone_number="+919876544099",
+            role="CALLER",
+            is_active=True
+        )
+        self.client.force_authenticate(user=caller2)
+
+        # Verify no silent reassignment: agent1 is now busy, next call to agent1 returns 400
+        call_count_before = Call.objects.count()
+        res_busy = self.client.post('/api/calls/request/', {'agent_user_id': self.agent1.id}, format='json')
+        self.assertEqual(res_busy.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(res_busy.data.get('success', True))
+        self.assertIn("unavailable or busy", res_busy.data.get('message', ''))
+        self.assertEqual(Call.objects.count(), call_count_before)
+
+    def test_15_call_caller_need_is_correctly_snapshotted_when_call_is_created(self):
+        # Set caller's need on profile
+        self.caller_profile.current_need = "someone_to_listen"
+        self.caller_profile.save(update_fields=['current_need'])
+        self.caller.refresh_from_db()
+
+        self.client.force_authenticate(user=self.caller)
+        res = self.client.post('/api/calls/request/', {'agent_user_id': self.agent1.id}, format='json')
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+
+        call_id = res.data['call_id']
+        call_obj = Call.objects.get(id=call_id)
+        self.assertEqual(call_obj.caller_need, "someone_to_listen")
+
+        # Free the call
+        call_obj.status = 'COMPLETED'
+        call_obj.save(update_fields=['status'])
+
+        # Explicitly passing caller_need in call request overrides profile
+        res2 = self.client.post('/api/calls/request/', {
+            'agent_user_id': self.agent1.id,
+            'caller_need': 'want_motivation'
+        }, format='json')
+        self.assertEqual(res2.status_code, status.HTTP_201_CREATED)
+        call2_obj = Call.objects.get(id=res2.data['call_id'])
+        self.assertEqual(call2_obj.caller_need, "want_motivation")
+
 
 
 

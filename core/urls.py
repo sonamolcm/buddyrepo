@@ -50,6 +50,9 @@ from .views import (  # type: ignore
     ReviewTagsView,
     CategoryListCreateView,
     CategoryDetailView,
+    CallerNeedsView,
+    ConversationCategoryListView,
+    ConversationCategoryAgentsView,
     # Legal & Helpline
     TermsAndConditionsView,
     CallerPrivacySettingsView,
@@ -359,6 +362,18 @@ urlpatterns = [
     path('doctors', ListenerListCreateView.as_view()),
     path('doctors/<str:identifier>/', ListenerDetailView.as_view(), name='doctor-detail'),
     path('doctors/<str:identifier>', ListenerDetailView.as_view()),
+
+    # ==========================================
+    # 6.05 CONVERSATION CATEGORIES & CALLER NEEDS
+    # ==========================================
+    path('caller/needs/', CallerNeedsView.as_view(), name='caller-needs'),
+    path('caller/needs', CallerNeedsView.as_view()),
+    path('conversation-categories/', ConversationCategoryListView.as_view(), name='conversation-categories-list'),
+    path('conversation-categories', ConversationCategoryListView.as_view()),
+    path('conversation-categories/<int:category_id>/agents/', ConversationCategoryAgentsView.as_view(), name='conversation-category-agents'),
+    path('conversation-categories/<int:category_id>/agents', ConversationCategoryAgentsView.as_view()),
+    path('conversation-categories/<str:category_id>/agents/', ConversationCategoryAgentsView.as_view(), name='conversation-category-agents-str'),
+    path('conversation-categories/<str:category_id>/agents', ConversationCategoryAgentsView.as_view()),
 
     # ==========================================
     # 6.1 APP LEGAL & SUPPORT (TERMS, PRIVACY, HELPLINE)

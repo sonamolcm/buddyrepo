@@ -1,3 +1,4 @@
+import re
 # pyrefly: ignore [missing-import]
 from rest_framework import serializers
 # pyrefly: ignore [missing-import]
@@ -17,8 +18,31 @@ from .models import (
     AgentWallet,
     AgentEarning,
     AgentPayout,
+    ConversationCategory,
+    CALLER_NEED_OPTIONS,
+    normalize_caller_need,
 )
 from .constants import ALLOWED_REVIEW_TAGS
+
+
+def validate_two_digit_age(value):
+    """
+    Validates that age is strictly exactly two numeric digits (10 to 99).
+    Rejects 1-digit (e.g. 3, 9), 3-digit (e.g. 100, 123), strings like 'abc',
+    negative numbers, or decimals.
+    """
+    if value is None:
+        return None
+    val_str = str(value).strip()
+    if not re.match(r'^\d{2}$', val_str):
+        raise serializers.ValidationError("Age must be exactly 2 digits (between 10 and 99).")
+    try:
+        age_int = int(val_str)
+    except (ValueError, TypeError):
+        raise serializers.ValidationError("Age must be a valid integer.")
+    if age_int < 10 or age_int > 99:
+        raise serializers.ValidationError("Age must be between 10 and 99.")
+    return age_int
 
 
 def normalize_interests(raw_val) -> list:
@@ -110,7 +134,7 @@ class CallerSignupCompleteProfileSerializer(serializers.Serializer):
     verification_token = serializers.CharField(required=False, allow_blank=True, write_only=True, default='')
     phone_number = serializers.CharField(max_length=25, required=False, allow_blank=True, default='')
     name = serializers.CharField(max_length=100)
-    age = serializers.IntegerField(min_value=13, max_value=120)
+    age = serializers.IntegerField(validators=[validate_two_digit_age])
     gender = serializers.ChoiceField(choices=User.GENDER_CHOICES)
     language = serializers.CharField(max_length=50, default='English', required=False)
     interests = serializers.JSONField(required=False, default=list)
@@ -267,6 +291,10 @@ class CallerProfileSerializer(serializers.ModelSerializer):
     matches_count = serializers.SerializerMethodField()
     voice_calls_count = serializers.SerializerMethodField()
     rating = serializers.SerializerMethodField()
+    age = serializers.IntegerField(required=False, allow_null=True, validators=[validate_two_digit_age])
+    gender = serializers.CharField(required=False, allow_blank=True)
+    language = serializers.CharField(required=False, allow_blank=True)
+    current_need = serializers.CharField(required=False, allow_blank=True, max_length=100)
 
     class Meta:
         model = CallerProfile
@@ -281,6 +309,7 @@ class CallerProfileSerializer(serializers.ModelSerializer):
             'location',
             'bio',
             'interests',
+            'current_need',
             'matches_count',
             'voice_calls_count',
             'rating',
@@ -292,6 +321,17 @@ class CallerProfileSerializer(serializers.ModelSerializer):
             'created_at',
             'updated_at',
         )
+
+    def validate_current_need(self, value):
+        if not value:
+            return ""
+        norm = normalize_caller_need(value)
+        if not norm:
+            allowed = [item["value"] for item in CALLER_NEED_OPTIONS]
+            raise serializers.ValidationError(
+                f"'{value}' is not a valid caller need. Allowed options: {', '.join(allowed)}."
+            )
+        return norm
 
     def get_profession(self, obj):
         # Note: Profession is defined on BuddyProfile, not in CallerProfile model
@@ -1013,6 +1053,16 @@ class CallerFavoriteSerializer(serializers.ModelSerializer):
 class CallRequestSerializer(serializers.Serializer):
     agent_user_id = serializers.IntegerField(required=False, allow_null=True)
     category_id = serializers.IntegerField(required=False, allow_null=True)
+    caller_need = serializers.CharField(required=False, allow_blank=True, max_length=100, default="")
+
+    def validate_caller_need(self, value):
+        if not value:
+            return ""
+        norm = normalize_caller_need(value)
+        if not norm:
+            allowed = [item["value"] for item in CALLER_NEED_OPTIONS]
+            raise serializers.ValidationError(f"Invalid caller need '{value}'. Allowed options: {', '.join(allowed)}.")
+        return norm
 
     def validate_category_id(self, value):
         if value is not None:
@@ -1174,6 +1224,12 @@ class AgentPasswordResetSerializer(serializers.Serializer):
     new_password = serializers.CharField(required=True, min_length=6)
 
 
+class ConversationCategorySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ConversationCategory
+        fields = ('id', 'name', 'tagline', 'emoji', 'order')
+
+
 class AgentProfileSerializer(serializers.ModelSerializer):
     agent_id = serializers.ReadOnlyField(source='listener_id')
     user_id = serializers.ReadOnlyField(source='user.id')
@@ -1182,6 +1238,12 @@ class AgentProfileSerializer(serializers.ModelSerializer):
     profession_id = serializers.IntegerField(source='profession.id', read_only=True)
     profession_name = serializers.SerializerMethodField()
     category = serializers.SerializerMethodField()
+    conversation_categories = ConversationCategorySerializer(many=True, read_only=True)
+    conversation_category_ids = serializers.ListField(
+        child=serializers.IntegerField(),
+        required=False,
+        write_only=True
+    )
     rate_per_second = serializers.IntegerField(read_only=True)
     rating = serializers.FloatField(read_only=True)
     total_calls = serializers.IntegerField(read_only=True)
@@ -1201,6 +1263,8 @@ class AgentProfileSerializer(serializers.ModelSerializer):
             'profession_id',
             'profession_name',
             'category',
+            'conversation_categories',
+            'conversation_category_ids',
             'bio',
             'profile_picture',
             'profile_picture_url',
@@ -1219,6 +1283,19 @@ class AgentProfileSerializer(serializers.ModelSerializer):
             'updated_at',
         )
         read_only_fields = ('rating', 'total_calls', 'total_earned_coins', 'is_verified', 'is_busy', 'is_available')
+
+    def validate_conversation_category_ids(self, value):
+        if value is None:
+            return []
+        if not isinstance(value, list):
+            raise serializers.ValidationError("conversation_category_ids must be a list of integers.")
+        if len(value) == 0:
+            return []
+        active_ids = set(ConversationCategory.objects.filter(id__in=value, is_active=True).values_list('id', flat=True))
+        for cat_id in value:
+            if cat_id not in active_ids:
+                raise serializers.ValidationError(f"Invalid or inactive conversation category ID: {cat_id}.")
+        return value
 
     def get_display_name(self, obj):
         return obj.name or obj.user.first_name or obj.user.username
@@ -1242,6 +1319,13 @@ class AgentProfileSerializer(serializers.ModelSerializer):
         return None
 
     def update(self, instance, validated_data):
+        cat_ids = None
+        if 'conversation_category_ids' in validated_data:
+            cat_ids = validated_data.pop('conversation_category_ids')
+        elif 'category_ids' in getattr(self, 'initial_data', {}):
+            raw_ids = self.initial_data.get('category_ids')
+            cat_ids = self.validate_conversation_category_ids(raw_ids)
+
         allowed_fields = ['name', 'bio', 'language', 'gender', 'interests', 'profile_picture', 'profession']
         for field in allowed_fields:
             if field in validated_data:
@@ -1320,6 +1404,8 @@ class AgentProfileSerializer(serializers.ModelSerializer):
             instance.user.save(update_fields=['first_name'])
 
         instance.save()
+        if cat_ids is not None:
+            instance.conversation_categories.set(cat_ids)
         return instance
 
 
@@ -1370,6 +1456,7 @@ class AgentWalletSerializer(serializers.ModelSerializer):
 
 
 class AgentPayoutSerializer(serializers.ModelSerializer):
+    coins = serializers.IntegerField(required=False)
     amount = serializers.IntegerField(write_only=True, required=False)
 
     class Meta:
@@ -1382,6 +1469,8 @@ class AgentPayoutSerializer(serializers.ModelSerializer):
             'payout_method',
             'payout_details',
             'status',
+            'week_start_date',
+            'week_end_date',
             'requested_at',
             'processed_at',
             'notes',
@@ -1395,13 +1484,16 @@ class AgentPayoutSerializer(serializers.ModelSerializer):
             data = dict(data)
         if 'amount' in data and 'coins' not in data:
             data['coins'] = data['amount']
+        if 'details' in data and 'payout_details' not in data:
+            data['payout_details'] = data['details']
         return super().to_internal_value(data)
 
     def validate_coins(self, value):
-        if value <= 0:
-            raise serializers.ValidationError("Payout coins must be greater than 0.")
-        if value < 50:
-            raise serializers.ValidationError("Minimum payout is 50 Coins.")
+        if value is not None:
+            if value <= 0:
+                raise serializers.ValidationError("Payout coins must be greater than 0.")
+            if value < 50:
+                raise serializers.ValidationError("Minimum payout is 50 Coins.")
         return value
 
 

@@ -315,6 +315,6 @@ class AgentEarningAdmin(admin.ModelAdmin):
 
 @admin.register(AgentPayout)
 class AgentPayoutAdmin(admin.ModelAdmin):
-    list_display = ('id', 'agent', 'coins', 'amount_inr', 'payout_method', 'status', 'requested_at')
-    list_filter = ('status', 'payout_method', 'requested_at')
+    list_display = ('id', 'agent', 'coins', 'amount_inr', 'week_start_date', 'week_end_date', 'payout_method', 'status', 'requested_at')
+    list_filter = ('status', 'payout_method', 'week_start_date', 'requested_at')
     search_fields = ('agent__username', 'payout_method')

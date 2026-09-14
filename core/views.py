@@ -4,6 +4,7 @@ import random
 import datetime
 import time
 import os
+import uuid
 import logging
 from django.utils import timezone
 from django.conf import settings  # type: ignore
@@ -50,6 +51,8 @@ from .models import (  # type: ignore
     AgentWallet,
     AgentEarning,
     AgentPayout,
+    ConversationCategory,
+    CALLER_NEED_OPTIONS,
 )
 from .permissions import IsAdminUser, IsCallerUser, IsAgentUser  # type: ignore
 # pyrefly: ignore [missing-import]
@@ -62,6 +65,7 @@ from .otp_service import (  # type: ignore
 )
 # pyrefly: ignore [missing-import]
 from .serializers import (  # type: ignore
+    validate_two_digit_age,
     normalize_interests,
     normalize_description_to_list,
     CallerSignupSendOTPSerializer,
@@ -85,6 +89,7 @@ from .serializers import (  # type: ignore
     CallReviewCreateSerializer,
     CallRequestSerializer,
     IncomingCallSerializer,
+    ConversationCategorySerializer,
     AgentLoginSerializer,
     AgentPasswordForgotSerializer,
     AgentPasswordResetSerializer,
@@ -399,25 +404,15 @@ class CallerLoginSendOTPView(APIView):
 
         phone_number = serializer.validated_data['phone_number'].strip()
 
-        # Check whether phone number belongs to a registered Caller (auto-provision if new)
+        # Check whether phone number belongs to an existing registered CALLER
         user = User.objects.filter(phone_number=phone_number).first()
-        if user is None:
-            user = User.objects.create_user(
-                username=phone_number,
-                phone_number=phone_number,
-                role='CALLER',
-                first_name='Caller',
-                is_verified=True,
-                is_active=True,
-                is_profile_completed=True
-            )
-            CallerProfile.objects.get_or_create(
-                user=user,
-                defaults={'name': 'Caller', 'language': 'English'}
-            )
-        elif not getattr(user, 'is_caller', False):
-            user.role = 'CALLER'
-            user.save(update_fields=['role'])
+        if not user or not getattr(user, 'is_caller', False):
+            return Response({
+                "success": False,
+                "message": "This phone number is not registered as a caller. Please sign up.",
+                "is_registered": False,
+                "action": "NAVIGATE_TO_SIGNUP"
+            }, status=status.HTTP_404_NOT_FOUND)
 
         if not user.is_active:
             return Response({
@@ -467,28 +462,18 @@ class CallerLoginVerifyOTPView(APIView):
             }, status=status.HTTP_400_BAD_REQUEST)
 
         user = User.objects.filter(phone_number=phone_number).first()
-        if user is None:
-            user = User.objects.create_user(
-                username=phone_number,
-                phone_number=phone_number,
-                role='CALLER',
-                first_name='Caller',
-                is_verified=True,
-                is_active=True,
-                is_profile_completed=True
-            )
-            CallerProfile.objects.get_or_create(
-                user=user,
-                defaults={'name': 'Caller', 'language': 'English'}
-            )
-        elif not getattr(user, 'is_caller', False):
-            user.role = 'CALLER'
-            user.save(update_fields=['role'])
+        if not user or not getattr(user, 'is_caller', False):
+            return Response({
+                "success": False,
+                "message": "This phone number is not registered as a caller. Please sign up.",
+                "is_registered": False,
+                "action": "NAVIGATE_TO_SIGNUP"
+            }, status=status.HTTP_404_NOT_FOUND)
 
         if not user.is_active:
             return Response({
                 "success": False,
-                "message": "This account is inactive."
+                "message": "Your account has been deactivated. Please contact support."
             }, status=status.HTTP_403_FORBIDDEN)
 
         # Retrieve caller profile
@@ -1697,53 +1682,85 @@ class CoinPurchaseHistoryView(APIView):
 CoinTransactionHistoryView = CoinPurchaseHistoryView
 
 
+ACTIVE_CALL_STATUSES = ['PENDING', 'RINGING', 'ACCEPTED', 'ACTIVE', 'CONNECTING']
+TERMINAL_CALL_STATUSES = ['COMPLETED', 'ENDED', 'REJECTED', 'CANCELLED', 'MISSED']
+
+
 def is_agent_available(agent):
     """
     Checks if an Agent/Listener is currently available:
-    - ListenerProfile.is_available must be True
+    - User must exist and be active (is_active = True)
+    - User must have agent/listener role or profile
     - ListenerProfile.is_on_duty must be True
-    - ListenerProfile.is_busy must be False
-    - BuddyProfile.is_busy must not be True
-    - Agent must have no ongoing active or ringing call
+    - Ground truth: Agent must have no ongoing active call in:
+      ['PENDING', 'RINGING', 'ACCEPTED', 'ACTIVE', 'CONNECTING']
+    - Self-heals stale is_busy or is_available database flags if agent is on duty
+      and has no active call.
     """
     if not agent or not agent.is_active:
         return False
 
-    if hasattr(agent, 'listener_profile'):
-        lp = agent.listener_profile
-        if not lp.is_available or lp.is_busy:
-            return False
-        if not getattr(lp, 'is_on_duty', True):
-            return False
+    is_agent_role = getattr(agent, 'role', None) in ('LISTENER', 'BUDDY', 'AGENT')
+    has_profile = hasattr(agent, 'listener_profile') or hasattr(agent, 'buddy_profile')
+    if not (is_agent_role or has_profile):
+        return False
 
-    if hasattr(agent, 'buddy_profile') and agent.buddy_profile.is_busy:
+    lp = getattr(agent, 'listener_profile', None)
+    if lp and not lp.is_on_duty:
         return False
 
     has_active_call = Call.objects.filter(
         receiver=agent,
-        status__in=['PENDING', 'RINGING', 'ACCEPTED', 'ACTIVE', 'CONNECTING']
+        status__in=ACTIVE_CALL_STATUSES
     ).exists()
+
     if has_active_call:
+        # Real active call exists -> agent is busy
+        if lp and (not lp.is_busy or lp.is_available):
+            lp.is_busy = True
+            lp.is_available = False
+            lp.save(update_fields=['is_busy', 'is_available'])
+        bp = getattr(agent, 'buddy_profile', None)
+        if bp and not bp.is_busy:
+            bp.is_busy = True
+            bp.save(update_fields=['is_busy'])
         return False
+
+    # Real active call does NOT exist and agent is on duty -> AVAILABLE!
+    # Self-heal stale flags in database
+    if lp and (lp.is_busy or not lp.is_available):
+        lp.is_busy = False
+        lp.is_available = True
+        lp.save(update_fields=['is_busy', 'is_available'])
+
+    bp = getattr(agent, 'buddy_profile', None)
+    if bp and bp.is_busy:
+        bp.is_busy = False
+        bp.save(update_fields=['is_busy'])
 
     return True
 
 
 def set_agent_busy(agent, is_busy):
     """
-    Updates Agent availability when a call is assigned, rejected, or ended.
+    Updates Agent availability when a call is assigned, accepted, rejected, cancelled, missed, or ended.
+    Synchronizes both ListenerProfile and BuddyProfile.
     """
     if not agent:
         return
 
+    is_busy_bool = bool(is_busy)
+
     if hasattr(agent, 'listener_profile'):
-        agent.listener_profile.is_available = not is_busy
-        agent.listener_profile.is_busy = is_busy
-        agent.listener_profile.save(update_fields=['is_available', 'is_busy'])
+        lp = agent.listener_profile
+        lp.is_busy = is_busy_bool
+        lp.is_available = bool(lp.is_on_duty and not is_busy_bool)
+        lp.save(update_fields=['is_available', 'is_busy'])
 
     if hasattr(agent, 'buddy_profile'):
-        agent.buddy_profile.is_busy = is_busy
-        agent.buddy_profile.save(update_fields=['is_busy'])
+        bp = agent.buddy_profile
+        bp.is_busy = is_busy_bool
+        bp.save(update_fields=['is_busy'])
 
 
 def find_available_agent_for_category(category):
@@ -1969,13 +1986,21 @@ class CallRequestView(APIView):
 
         now = timezone.now()
         cat_id = category.id if category else 0
-        channel_name = f"call_{cat_id}_{caller.id}_{agent.id}_{int(now.timestamp())}"
+        channel_name = f"call_{cat_id}_{caller.id}_{agent.id}_{int(now.timestamp())}_{uuid.uuid4().hex[:8]}"
+
+        # Snapshot caller's need from explicit request body or caller profile
+        caller_need = serializer.validated_data.get('caller_need', '')
+        if not caller_need and caller:
+            cp = CallerProfile.objects.filter(user=caller).first()
+            if cp and cp.current_need:
+                caller_need = cp.current_need
 
         call = Call.objects.create(
             caller=caller,
             receiver=agent,
             category=category,
             channel_name=channel_name,
+            caller_need=caller_need,
             call_type='AUDIO',
             status='RINGING',
         )
@@ -2277,10 +2302,38 @@ def _handle_call_status_update(request, call_id, target_status):
                 "status": "CANCELLED"
             }, status=status.HTTP_200_OK)
 
+        # 5. MISSED
+        elif target_status == 'MISSED':
+            if request.user.id not in (call.caller_id, call.receiver_id):
+                return Response({
+                    "success": False,
+                    "message": "You do not belong to this call."
+                }, status=status.HTTP_403_FORBIDDEN)
+
+            if call.status not in ('RINGING', 'PENDING'):
+                return Response({
+                    "success": False,
+                    "message": f"Cannot mark call as missed in status '{call.status}'."
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            now = timezone.now()
+            call.status = 'MISSED'
+            call.ended_at = now
+            call.save(update_fields=['status', 'ended_at'])
+
+            set_agent_busy(call.receiver, False)
+
+            return Response({
+                "success": True,
+                "message": "Call marked as missed.",
+                "call_id": call.id,
+                "status": "MISSED"
+            }, status=status.HTTP_200_OK)
+
         else:
             return Response({
                 "success": False,
-                "message": f"Invalid status '{target_status}'. Supported statuses: 'accepted', 'rejected', 'completed', 'cancelled'."
+                "message": f"Invalid status '{target_status}'. Supported statuses: 'accepted', 'rejected', 'completed', 'cancelled', 'missed'."
             }, status=status.HTTP_400_BAD_REQUEST)
 
 
@@ -2294,6 +2347,7 @@ class CallStatusUpdateView(APIView):
       - "rejected": Agent rejects call. Frees Agent availability.
       - "completed": Caller or Agent ends call. Settles wallet balance/earnings and restores duty availability.
       - "cancelled": Caller or Agent cancels ringing call. Frees Agent availability.
+      - "missed": Caller or Agent marks call as missed. Frees Agent availability.
     """
     permission_classes = [permissions.IsAuthenticated]
 
@@ -2302,7 +2356,7 @@ class CallStatusUpdateView(APIView):
         if not status_raw or not isinstance(status_raw, str):
             return Response({
                 "success": False,
-                "message": "The 'status' field is required. Supported statuses: 'accepted', 'rejected', 'completed', 'cancelled'."
+                "message": "The 'status' field is required. Supported statuses: 'accepted', 'rejected', 'completed', 'cancelled', 'missed'."
             }, status=status.HTTP_400_BAD_REQUEST)
 
         target_status = status_raw.strip().upper()
@@ -2425,8 +2479,8 @@ class AgoraCallTokenView(APIView):
                 "message": "You do not belong to this call."
             }, status=status.HTTP_403_FORBIDDEN)
 
-        # Allow token generation while call is RINGING, PENDING, ACCEPTED, or ACTIVE
-        if call.status not in ('RINGING', 'PENDING', 'ACCEPTED', 'ACTIVE'):
+        # Allow token generation only while call is ACCEPTED or ACTIVE (reject RINGING, PENDING, or ended)
+        if call.status not in ('ACCEPTED', 'ACTIVE'):
             return Response({
                 "success": False,
                 "message": f"Cannot generate Agora token for call in status '{call.status}'. Call has ended or is inactive.",
@@ -2634,7 +2688,7 @@ class CallHistoryView(APIView):
         coins_deducted = int(data.get('coins_deducted', 0) or 0)
 
         now = timezone.now()
-        channel_name = data.get('channel_name') or f"call_{caller.id}_{receiver.id}_{int(now.timestamp())}"
+        channel_name = data.get('channel_name') or f"call_{caller.id}_{receiver.id}_{int(now.timestamp())}_{uuid.uuid4().hex[:8]}"
 
         call = Call.objects.create(
             caller=caller,
@@ -3561,9 +3615,9 @@ def serialize_listener_user(user, request=None):
         "rating": float(getattr(lp, 'rating', 5.00) if lp else (getattr(bp, 'rating', 5.00) if bp else 5.00)),
         "total_calls": int(getattr(lp, 'total_calls', 0) if lp else (getattr(bp, 'total_calls', 0) if bp else 0)),
         "total_earned_coins": int(getattr(lp, 'total_earned_coins', 0) if lp else 0),
-        "is_available": lp.is_available if lp else True,
+        "is_available": is_agent_available(user) if (lp and lp.is_on_duty) else False,
         "is_on_duty": lp.is_on_duty if lp else False,
-        "is_busy": getattr(lp, 'is_busy', False) if lp else (getattr(bp, 'is_busy', False) if bp else False),
+        "is_busy": bool(lp.is_on_duty and not is_agent_available(user)) if (lp and lp.is_on_duty) else False,
         "is_online": getattr(bp, 'is_online', False) if bp else getattr(lp, 'is_on_duty', False),
         "is_verified": user.is_verified,
         "is_active": user.is_active,
@@ -3924,6 +3978,153 @@ class CategoryDetailView(APIView):
 
 
 CategoryListView = CategoryListCreateView
+
+
+# ===================================================
+# 6.15 CONVERSATION CATEGORIES & CALLER NEEDS
+# ===================================================
+class CallerNeedsView(APIView):
+    """
+    GET /api/caller/needs/
+    Returns list of 8 official caller conversation reason / need options.
+    Authentication: Caller only.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        if not getattr(request.user, 'is_caller', False):
+            return Response({
+                "success": False,
+                "message": "Only callers can access caller need options."
+            }, status=status.HTTP_403_FORBIDDEN)
+
+        return Response({
+            "success": True,
+            "message": "Caller needs retrieved successfully.",
+            "data": CALLER_NEED_OPTIONS
+        }, status=status.HTTP_200_OK)
+
+
+class ConversationCategoryListView(APIView):
+    """
+    GET /api/conversation-categories/
+    Returns active conversation categories ordered by order, id.
+    Public endpoint.
+    """
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request):
+        categories = ConversationCategory.objects.filter(is_active=True).order_by('order', 'id')
+        serializer = ConversationCategorySerializer(categories, many=True)
+        return Response({
+            "success": True,
+            "message": "Conversation categories retrieved successfully.",
+            "count": len(serializer.data),
+            "data": serializer.data
+        }, status=status.HTTP_200_OK)
+
+
+class ConversationCategoryAgentsView(APIView):
+    """
+    GET /api/conversation-categories/<category_id>/agents/
+    Optional param: ?available_only=true
+    Returns agents matching the conversation category.
+    """
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request, category_id):
+        # Resolve category by id or name
+        category = None
+        cat_str = str(category_id).strip()
+        if cat_str.isdigit():
+            category = ConversationCategory.objects.filter(id=int(cat_str), is_active=True).first()
+        if not category:
+            category = ConversationCategory.objects.filter(name__iexact=cat_str, is_active=True).first()
+
+        if not category:
+            return Response({
+                "success": False,
+                "message": f"Conversation category with ID '{category_id}' does not exist or is inactive."
+            }, status=status.HTTP_404_NOT_FOUND)
+
+        available_only = request.query_params.get('available_only', '').lower() in ('true', '1', 'yes')
+
+        agent_users = User.objects.filter(
+            role__in=['LISTENER', 'AGENT', 'BUDDY'],
+            is_active=True,
+            listener_profile__conversation_categories=category
+        ).select_related('listener_profile').prefetch_related('listener_profile__conversation_categories').distinct()
+
+        result_agents = []
+        for user in agent_users:
+            lp = getattr(user, 'listener_profile', None)
+            if not lp:
+                continue
+
+            if available_only:
+                # Agent must be on duty and available via existing availability helper
+                if not lp.is_on_duty:
+                    continue
+                if not is_agent_available(user):
+                    continue
+
+            photo_url = None
+            if lp.profile_picture:
+                try:
+                    raw_url = lp.profile_picture.url
+                    photo_url = request.build_absolute_uri(raw_url) if not raw_url.startswith(('http://', 'https://')) else raw_url
+                except Exception:
+                    photo_url = None
+
+            cats_data = [
+                {
+                    "id": c.id,
+                    "name": c.name,
+                    "emoji": c.emoji,
+                    "tagline": c.tagline
+                }
+                for c in lp.conversation_categories.filter(is_active=True).order_by('order', 'id')
+            ]
+
+            result_agents.append({
+                "id": user.id,
+                "username": user.username,
+                "name": lp.name or user.first_name or user.username,
+                "profile_picture": photo_url,
+                "rate_per_second": lp.rate_per_second,
+                "rating": float(lp.rating),
+                "is_on_duty": lp.is_on_duty,
+                "is_available": lp.is_available,
+                "is_busy": lp.is_busy,
+                "conversation_categories": cats_data
+            })
+
+        if not result_agents:
+            return Response({
+                "success": True,
+                "message": "No available agents found for this conversation category.",
+                "count": 0,
+                "category": {
+                    "id": category.id,
+                    "name": category.name,
+                    "emoji": category.emoji,
+                    "tagline": category.tagline
+                },
+                "data": []
+            }, status=status.HTTP_200_OK)
+
+        return Response({
+            "success": True,
+            "message": f"Agents for '{category.name}' retrieved successfully.",
+            "count": len(result_agents),
+            "category": {
+                "id": category.id,
+                "name": category.name,
+                "emoji": category.emoji,
+                "tagline": category.tagline
+            },
+            "data": result_agents
+        }, status=status.HTTP_200_OK)
 
 
 # ===================================================
@@ -4361,11 +4562,25 @@ class WebAboutYouView(APIView):
         age = request.data.get('age')
         gender = request.data.get('gender')
 
+        if age is not None and age != '':
+            try:
+                age = validate_two_digit_age(age)
+            except Exception as e:
+                err_msg = getattr(e, 'detail', None) or str(e)
+                if isinstance(err_msg, list):
+                    err_msg = err_msg[0]
+                return Response({
+                    "success": False,
+                    "message": str(err_msg)
+                }, status=status.HTTP_400_BAD_REQUEST)
+        else:
+            age = None
+
         user = request.user
         if hasattr(user, 'first_name'):
             user.first_name = first_name
-        if hasattr(user, 'age') and age:
-            user.age = int(age)
+        if hasattr(user, 'age'):
+            user.age = age
         if hasattr(user, 'gender') and gender:
             user.gender = gender
         user.save()
@@ -4373,8 +4588,7 @@ class WebAboutYouView(APIView):
         caller_profile, _ = CallerProfile.objects.get_or_create(user=user)
         if first_name:
             caller_profile.name = first_name
-        if age:
-            caller_profile.age = int(age)
+        caller_profile.age = age
         if gender:
             caller_profile.gender = gender
         raw_interests = request.data.get('interests') or request.data.get('interest')
@@ -4684,6 +4898,19 @@ class CallerListCreateView(APIView):
 
         name = (request.data.get('name') or '').strip()
         age = request.data.get('age')
+        if age is not None and age != '':
+            try:
+                age = validate_two_digit_age(age)
+            except Exception as e:
+                err_msg = getattr(e, 'detail', None) or str(e)
+                if isinstance(err_msg, list):
+                    err_msg = err_msg[0]
+                return Response({
+                    "success": False,
+                    "message": str(err_msg)
+                }, status=status.HTTP_400_BAD_REQUEST)
+        else:
+            age = None
         gender = request.data.get('gender')
         language = (request.data.get('language') or 'English').strip()
         interests = request.data.get('interests') or []
@@ -4826,7 +5053,21 @@ class CallerDetailView(APIView):
             cp.name = data['name']
             user.first_name = data['name']
         if 'age' in data:
-            cp.age = int(data['age']) if data['age'] else None
+            if data['age'] is not None and data['age'] != '':
+                try:
+                    cp.age = validate_two_digit_age(data['age'])
+                    user.age = cp.age
+                except Exception as e:
+                    err_msg = getattr(e, 'detail', None) or str(e)
+                    if isinstance(err_msg, list):
+                        err_msg = err_msg[0]
+                    return Response({
+                        "success": False,
+                        "message": str(err_msg)
+                    }, status=status.HTTP_400_BAD_REQUEST)
+            else:
+                cp.age = None
+                user.age = None
         if 'gender' in data:
             cp.gender = data['gender']
         if 'language' in data:
@@ -4975,12 +5216,22 @@ class CallerUpdateView(APIView):
         if 'name' in data and data['name'] is not None:
             profile.name = str(data['name']).strip()
             user.first_name = profile.name
-        if 'age' in data and data['age'] is not None:
-            try:
-                profile.age = int(data['age'])
-                user.age = profile.age
-            except (ValueError, TypeError):
-                pass
+        if 'age' in data:
+            if data['age'] is not None and data['age'] != '':
+                try:
+                    profile.age = validate_two_digit_age(data['age'])
+                    user.age = profile.age
+                except Exception as e:
+                    err_msg = getattr(e, 'detail', None) or str(e)
+                    if isinstance(err_msg, list):
+                        err_msg = err_msg[0]
+                    return Response({
+                        "success": False,
+                        "message": str(err_msg)
+                    }, status=status.HTTP_400_BAD_REQUEST)
+            else:
+                profile.age = None
+                user.age = None
         if 'gender' in data and data['gender'] is not None:
             profile.gender = str(data['gender']).strip()
             user.gender = profile.gender
@@ -5848,8 +6099,7 @@ class AgentRateView(APIView):
             defaults={'listener_id': request.user.username}
         )
         lp.rate_per_second = rate
-        lp.rate_per_minute = rate * 60
-        lp.save(update_fields=['rate_per_second', 'rate_per_minute'])
+        lp.save(update_fields=['rate_per_second'])
 
         # Also update legacy buddy profile if exists
         if hasattr(request.user, 'buddy_profile'):
@@ -5874,7 +6124,7 @@ class AgentDutyView(APIView):
 
     def get(self, request):
         agent = request.user
-        lp = getattr(agent, 'listener_profile', None)
+        lp = ListenerProfile.objects.filter(user=agent).first()
         is_on_duty = lp.is_on_duty if lp else False
 
         active_session = AgentDutySession.objects.filter(agent=agent, ended_at__isnull=True).order_by('-started_at').first()
@@ -5951,7 +6201,12 @@ class AgentDutyOnView(APIView):
 
         lp.is_on_duty = True
         lp.is_available = True
-        lp.save(update_fields=['is_on_duty', 'is_available'])
+        lp.is_busy = False
+        lp.save(update_fields=['is_on_duty', 'is_available', 'is_busy'])
+
+        if hasattr(agent, 'buddy_profile'):
+            agent.buddy_profile.is_busy = False
+            agent.buddy_profile.save(update_fields=['is_busy'])
 
         # Close any orphaned sessions
         AgentDutySession.objects.filter(agent=agent, ended_at__isnull=True).update(ended_at=now)
@@ -5981,7 +6236,7 @@ class AgentDutyOffView(APIView):
 
     def post(self, request):
         agent = request.user
-        lp = getattr(agent, 'listener_profile', None)
+        lp = ListenerProfile.objects.filter(user=agent).first()
         now = timezone.now()
 
         if lp:
@@ -6224,20 +6479,96 @@ class AgentWalletView(APIView):
         }, status=status.HTTP_200_OK)
 
 
+def get_weekly_payout_bounds(as_of=None):
+    """
+    Returns (latest_completed_monday, latest_completed_sunday, current_week_monday, current_week_sunday)
+    in UTC calendar dates.
+    A standard week runs from Monday 00:00:00 UTC through Sunday 23:59:59 UTC.
+    """
+    if as_of is None:
+        as_of = timezone.now()
+    if timezone.is_aware(as_of):
+        as_of_utc = as_of.astimezone(datetime.timezone.utc)
+    else:
+        as_of_utc = as_of.replace(tzinfo=datetime.timezone.utc)
+    today = as_of_utc.date()
+    current_week_monday = today - datetime.timedelta(days=today.weekday())
+    current_week_sunday = current_week_monday + datetime.timedelta(days=6)
+    latest_completed_sunday = current_week_monday - datetime.timedelta(days=1)
+    latest_completed_monday = latest_completed_sunday - datetime.timedelta(days=6)
+    return latest_completed_monday, latest_completed_sunday, current_week_monday, current_week_sunday
+
+
 class AgentPayoutView(APIView):
     """
-    Agent Payout API:
-    GET /api/agent/payouts/ - View payout request history
-    POST /api/agent/payouts/ - Request a payout (deducts from wallet balance atomically)
+    Agent Weekly Payout API:
+    GET /api/agent/payouts/ - View payout request history and weekly eligibility summary
+    POST /api/agent/payouts/ - Request a payout for the latest completed Monday-to-Sunday UTC week
     """
     permission_classes = [permissions.IsAuthenticated, IsAgentUser]
 
     def get(self, request):
-        payouts = AgentPayout.objects.filter(agent=request.user).order_by('-requested_at')
+        agent = request.user
+        payouts = AgentPayout.objects.filter(agent=agent).order_by('-requested_at')
         serializer = AgentPayoutSerializer(payouts, many=True)
+
+        comp_mon, comp_sun, curr_mon, curr_sun = get_weekly_payout_bounds()
+
+        comp_start_dt = datetime.datetime.combine(comp_mon, datetime.time.min).replace(tzinfo=datetime.timezone.utc)
+        comp_end_dt = datetime.datetime.combine(comp_sun, datetime.time.max).replace(tzinfo=datetime.timezone.utc)
+
+        curr_start_dt = datetime.datetime.combine(curr_mon, datetime.time.min).replace(tzinfo=datetime.timezone.utc)
+        curr_end_dt = datetime.datetime.combine(curr_sun, datetime.time.max).replace(tzinfo=datetime.timezone.utc)
+
+        # Eligible unpaid earnings for the latest completed week
+        comp_earnings_qs = AgentEarning.objects.filter(
+            agent=agent,
+            created_at__range=(comp_start_dt, comp_end_dt),
+            payout__isnull=True
+        )
+        eligible_coins = comp_earnings_qs.aggregate(total=Sum('coins'))['total'] or 0
+
+        # Check if payout already requested for latest completed week
+        existing_payout = AgentPayout.objects.filter(
+            agent=agent,
+            week_start_date=comp_mon,
+            status__in=['PENDING', 'APPROVED', 'COMPLETED']
+        ).first()
+
+        can_request_payout = (
+            existing_payout is None and
+            eligible_coins >= 50
+        )
+
+        # Current in-progress week earnings
+        curr_earnings_qs = AgentEarning.objects.filter(
+            agent=agent,
+            created_at__range=(curr_start_dt, curr_end_dt),
+            payout__isnull=True
+        )
+        curr_coins = curr_earnings_qs.aggregate(total=Sum('coins'))['total'] or 0
+
+        weekly_summary = {
+            "latest_completed_week": {
+                "week_start": str(comp_mon),
+                "week_end": str(comp_sun),
+                "eligible_coins": eligible_coins,
+                "minimum_required_coins": 50,
+                "can_request_payout": can_request_payout,
+                "existing_payout_status": existing_payout.status if existing_payout else None
+            },
+            "current_week": {
+                "week_start": str(curr_mon),
+                "week_end": str(curr_sun),
+                "accumulated_coins": curr_coins,
+                "note": "Earnings will become eligible for payout after Sunday 23:59:59 UTC."
+            }
+        }
+
         return Response({
             "success": True,
             "count": len(payouts),
+            "weekly_summary": weekly_summary,
             "payouts": serializer.data
         }, status=status.HTTP_200_OK)
 
@@ -6249,39 +6580,120 @@ class AgentPayoutView(APIView):
                 "message": serializer.errors
             }, status=status.HTTP_400_BAD_REQUEST)
 
-        coins = serializer.validated_data.get('coins') or 0
-        payout_method = serializer.validated_data.get('payout_method', 'UPI')
-        details = serializer.validated_data.get('payout_details', {})
+        agent = request.user
+        payout_method = serializer.validated_data.get('payout_method') or 'UPI'
+        details = serializer.validated_data.get('payout_details') or {}
 
-        if coins <= 0:
-            return Response({
-                "success": False,
-                "message": "Payout coins must be greater than zero."
-            }, status=status.HTTP_400_BAD_REQUEST)
+        # 1. Automatically determine the latest completed Monday-to-Sunday UTC week
+        comp_mon, comp_sun, curr_mon, curr_sun = get_weekly_payout_bounds()
 
-        with transaction.atomic():
-            wallet, _ = AgentWallet.objects.select_for_update().get_or_create(agent=request.user)
-            if wallet.balance < coins:
+        # Optional override if client explicitly specified a valid past week_start_date
+        custom_week_start = request.data.get('week_start_date')
+        if custom_week_start:
+            try:
+                if isinstance(custom_week_start, str):
+                    requested_start = datetime.datetime.strptime(custom_week_start.strip(), "%Y-%m-%d").date()
+                else:
+                    requested_start = custom_week_start
+                if requested_start.weekday() != 0:
+                    return Response({
+                        "success": False,
+                        "message": f"Invalid week_start_date '{custom_week_start}'. A weekly payout period must start on a Monday."
+                    }, status=status.HTTP_400_BAD_REQUEST)
+                requested_end = requested_start + datetime.timedelta(days=6)
+                if requested_end >= curr_mon:
+                    return Response({
+                        "success": False,
+                        "message": f"The weekly period {requested_start} to {requested_end} is still ongoing. Payouts can only be requested for completed weekly periods."
+                    }, status=status.HTTP_400_BAD_REQUEST)
+                week_start_date = requested_start
+                week_end_date = requested_end
+            except ValueError:
                 return Response({
                     "success": False,
-                    "message": f"Insufficient wallet balance. Current balance: {wallet.balance} coins."
+                    "message": "Invalid date format for week_start_date. Expected YYYY-MM-DD."
+                }, status=status.HTTP_400_BAD_REQUEST)
+        else:
+            week_start_date = comp_mon
+            week_end_date = comp_sun
+
+        # 2. Prevent duplicate payout for the same agent and week
+        existing_payout = AgentPayout.objects.filter(
+            agent=agent,
+            week_start_date=week_start_date,
+            status__in=['PENDING', 'APPROVED', 'COMPLETED']
+        ).first()
+        if existing_payout:
+            return Response({
+                "success": False,
+                "message": f"A payout request for the week of {week_start_date} to {week_end_date} has already been submitted (Status: {existing_payout.status})."
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        # 3. Calculate eligible unpaid AgentEarning records for that week
+        week_start_dt = datetime.datetime.combine(week_start_date, datetime.time.min).replace(tzinfo=datetime.timezone.utc)
+        week_end_dt = datetime.datetime.combine(week_end_date, datetime.time.max).replace(tzinfo=datetime.timezone.utc)
+
+        with transaction.atomic():
+            earnings_qs = AgentEarning.objects.select_for_update().filter(
+                agent=agent,
+                created_at__range=(week_start_dt, week_end_dt),
+                payout__isnull=True
+            )
+            eligible_coins = earnings_qs.aggregate(total=Sum('coins'))['total'] or 0
+
+            # 4. Require at least 50 eligible coins
+            if eligible_coins <= 0:
+                return Response({
+                    "success": False,
+                    "message": f"No eligible unpaid earnings found for the completed week of {week_start_date} to {week_end_date}."
                 }, status=status.HTTP_400_BAD_REQUEST)
 
-            wallet.balance -= coins
-            wallet.total_paid_out += coins
+            if eligible_coins < 50:
+                return Response({
+                    "success": False,
+                    "message": f"Eligible earnings for the week of {week_start_date} to {week_end_date} ({eligible_coins} coins) are below the minimum payout threshold of 50 coins."
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            requested_coins = serializer.validated_data.get('coins')
+            if requested_coins is not None:
+                if requested_coins > eligible_coins:
+                    return Response({
+                        "success": False,
+                        "message": f"Requested payout of {requested_coins} coins exceeds eligible weekly earnings of {eligible_coins} coins."
+                    }, status=status.HTTP_400_BAD_REQUEST)
+                payout_coins = requested_coins
+            else:
+                payout_coins = eligible_coins
+
+            # 5. Atomically verify & deduct eligible coins from AgentWallet
+            wallet, _ = AgentWallet.objects.select_for_update().get_or_create(agent=agent)
+            if wallet.balance < payout_coins:
+                return Response({
+                    "success": False,
+                    "message": f"Insufficient wallet balance. Current balance: {wallet.balance} coins, required: {payout_coins} coins."
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            wallet.balance -= payout_coins
+            wallet.total_paid_out += payout_coins
             wallet.save(update_fields=['balance', 'total_paid_out', 'updated_at'])
 
+            # 6. Create AgentPayout with weekly dates
             payout = AgentPayout.objects.create(
-                agent=request.user,
-                coins=coins,
+                agent=agent,
+                coins=payout_coins,
+                week_start_date=week_start_date,
+                week_end_date=week_end_date,
                 payout_method=payout_method,
                 payout_details=details,
                 status='PENDING'
             )
 
+            # 7. Link eligible AgentEarning records to that payout
+            earnings_qs.update(payout=payout)
+
         return Response({
             "success": True,
-            "message": f"Payout request for {coins} coins submitted successfully.",
+            "message": f"Weekly payout request for {payout_coins} coins (week {week_start_date} to {week_end_date}) submitted successfully.",
             "payout": AgentPayoutSerializer(payout).data,
             "remaining_balance": wallet.balance
         }, status=status.HTTP_201_CREATED)
@@ -6355,7 +6767,7 @@ class AdminPayoutActionView(APIView):
     """
     POST /api/admin/withdrawals/<payout_id>/action/
     Admin endpoint to approve, complete, or reject a withdrawal request.
-    If rejected, atomically refunds coins back to the Agent's wallet.
+    If rejected, atomically refunds coins back to the Agent's wallet and unlinks earnings.
     """
     permission_classes = [permissions.AllowAny]
 
@@ -6391,6 +6803,9 @@ class AdminPayoutActionView(APIView):
                     aw.balance += payout.coins
                     aw.total_paid_out = max(0, aw.total_paid_out - payout.coins)
                     aw.save(update_fields=['balance', 'total_paid_out', 'updated_at'])
+
+                    # Unlink earnings so they can be re-requested
+                    payout.earnings.update(payout=None)
 
                     payout.status = 'REJECTED'
                     payout.processed_at = timezone.now()

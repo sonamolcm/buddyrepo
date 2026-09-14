@@ -130,6 +130,50 @@ class User(AbstractUser):
 
 
 
+class ConversationCategory(models.Model):
+    name = models.CharField(max_length=100, unique=True)
+    tagline = models.CharField(max_length=255, blank=True)
+    emoji = models.CharField(max_length=20, blank=True)
+    is_active = models.BooleanField(default=True)
+    order = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['order', 'id']
+        verbose_name_plural = 'Conversation Categories'
+
+    def __str__(self):
+        return f"{self.emoji} {self.name}" if self.emoji else self.name
+
+
+# Central Definition of Caller Need Options
+CALLER_NEED_OPTIONS = [
+    {"value": "someone_to_listen", "label": "Someone to listen"},
+    {"value": "im_lonely", "label": "I'm lonely"},
+    {"value": "im_bored", "label": "I'm bored"},
+    {"value": "need_advice", "label": "I need advice"},
+    {"value": "want_motivation", "label": "I want motivation"},
+    {"value": "want_casual_conversation", "label": "I want casual conversation"},
+    {"value": "practice_language", "label": "I want to practice a language"},
+    {"value": "talk_to_someone_interesting", "label": "I want to talk to someone interesting"},
+]
+CALLER_NEED_VALUES = {item["value"]: item["label"] for item in CALLER_NEED_OPTIONS}
+CALLER_NEED_LABELS = {item["label"].lower(): item["value"] for item in CALLER_NEED_OPTIONS}
+
+
+def normalize_caller_need(value: str) -> str:
+    if not value or not isinstance(value, str):
+        return ""
+    clean = value.strip()
+    if clean in CALLER_NEED_VALUES:
+        return clean
+    lower = clean.lower()
+    if lower in CALLER_NEED_LABELS:
+        return CALLER_NEED_LABELS[lower]
+    return ""
+
+
 class CallerProfile(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='caller_profile')
     name = models.CharField(max_length=100, blank=True)
@@ -137,6 +181,7 @@ class CallerProfile(models.Model):
     gender = models.CharField(max_length=20, choices=User.GENDER_CHOICES, null=True, blank=True)
     language = models.CharField(max_length=50, blank=True, default='English')
     interests = models.JSONField(default=list, blank=True)
+    current_need = models.CharField(max_length=100, blank=True, default='')
     profile_picture = models.ImageField(upload_to='callers/', null=True, blank=True)
     is_online = models.BooleanField(default=False)
     profile_visible_in_feed = models.BooleanField(default=True)
@@ -158,6 +203,11 @@ class ListenerProfile(models.Model):
     listener_id = models.CharField(max_length=30, unique=True, db_index=True)
     name = models.CharField(max_length=100, blank=True)
     profession = models.ForeignKey('Category', on_delete=models.SET_NULL, null=True, blank=True, related_name='listeners')
+    conversation_categories = models.ManyToManyField(
+        ConversationCategory,
+        blank=True,
+        related_name='agents'
+    )
     bio = models.TextField(blank=True)
     gender = models.CharField(max_length=20, choices=User.GENDER_CHOICES, null=True, blank=True)
     language = models.CharField(max_length=100, default='English', blank=True)
@@ -188,7 +238,12 @@ class ListenerProfile(models.Model):
         return self.name or self.user.first_name or self.user.username
 
     def sync_availability(self):
-        self.is_available = self.is_on_duty and not self.is_busy
+        if hasattr(self, 'user') and self.user_id:
+            has_active = self.user.incoming_calls.filter(
+                status__in=['PENDING', 'RINGING', 'ACCEPTED', 'ACTIVE', 'CONNECTING']
+            ).exists()
+            self.is_busy = has_active
+        self.is_available = bool(self.is_on_duty and not self.is_busy)
         return self.is_available
 
     def __str__(self):
@@ -345,6 +400,7 @@ class Call(models.Model):
     receiver = models.ForeignKey(User, on_delete=models.CASCADE, related_name='incoming_calls')
     category = models.ForeignKey(Category, on_delete=models.SET_NULL, null=True, blank=True, related_name='calls')
     channel_name = models.CharField(max_length=100, unique=True, help_text="WebRTC / Agora channel ID")
+    caller_need = models.CharField(max_length=100, blank=True, default='')
     call_type = models.CharField(max_length=10, choices=CALL_TYPES, default='AUDIO')
     status = models.CharField(max_length=20, choices=CALL_STATUS, default='RINGING')
     accepted_at = models.DateTimeField(null=True, blank=True)
@@ -451,6 +507,7 @@ class AgentEarning(models.Model):
     )
     agent = models.ForeignKey(User, on_delete=models.CASCADE, related_name='earnings')
     call = models.ForeignKey('Call', null=True, blank=True, on_delete=models.SET_NULL, related_name='agent_earnings')
+    payout = models.ForeignKey('AgentPayout', null=True, blank=True, on_delete=models.SET_NULL, related_name='earnings', help_text="Payout in which this earning was disbursed")
     earning_type = models.CharField(max_length=20, choices=EARNING_TYPES, default='VOICE')
     coins = models.PositiveIntegerField(default=0)
     description = models.CharField(max_length=255, blank=True)
@@ -484,6 +541,8 @@ class AgentPayout(models.Model):
     payout_method = models.CharField(max_length=50, default='UPI')
     payout_details = models.JSONField(default=dict, blank=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='PENDING', db_index=True)
+    week_start_date = models.DateField(null=True, blank=True, db_index=True, help_text="Start date of weekly payout period (Monday)")
+    week_end_date = models.DateField(null=True, blank=True, help_text="End date of weekly payout period (Sunday)")
     requested_at = models.DateTimeField(auto_now_add=True)
     processed_at = models.DateTimeField(null=True, blank=True)
     notes = models.TextField(blank=True)

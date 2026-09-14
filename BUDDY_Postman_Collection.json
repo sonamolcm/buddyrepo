@@ -65,6 +65,16 @@
       "key": "agent_user_id",
       "value": "1",
       "type": "string"
+    },
+    {
+      "key": "agent_access_token",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "payout_id",
+      "value": "1",
+      "type": "string"
     }
   ],
   "item": [
@@ -871,6 +881,65 @@
               "path": ["agents", "{{agent_user_id}}", "reviews", ""]
             },
             "description": "Public list of reviews received by an agent, including tags, caller display name, and average rating."
+          }
+        }
+      ]
+    },
+    {
+      "name": "7. Agent Weekly Payouts",
+      "item": [
+        {
+          "name": "Get Payouts & Weekly Summary (GET /agent/payouts/)",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{agent_access_token}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/agent/payouts/",
+              "host": ["{{baseUrl}}"],
+              "path": ["agent", "payouts", ""]
+            },
+            "description": "Returns payout request history and weekly eligibility summary (latest completed week and current week)."
+          }
+        },
+        {
+          "name": "Request Weekly Payout (POST /agent/payouts/)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{agent_access_token}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"payout_method\": \"UPI\",\n  \"payout_details\": {\n    \"upi_id\": \"agent@okhdfcbank\"\n  }\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/agent/payouts/",
+              "host": ["{{baseUrl}}"],
+              "path": ["agent", "payouts", ""]
+            },
+            "description": "Requests payout for eligible earnings from the latest completed Monday-to-Sunday UTC week automatically."
+          }
+        },
+        {
+          "name": "Admin Process Payout (POST /admin/withdrawals/:payout_id/action/)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"action\": \"approve\",\n  \"note\": \"Approved for weekly settlement via UPI.\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/admin/withdrawals/{{payout_id}}/action/",
+              "host": ["{{baseUrl}}"],
+              "path": ["admin", "withdrawals", "{{payout_id}}", "action", ""]
+            },
+            "description": "Admin approve, complete, or reject a payout. If rejected, coins are refunded and earnings unlinked."
           }
         }
       ]
