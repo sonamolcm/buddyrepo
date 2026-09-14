@@ -47,6 +47,7 @@ from .views import (  # type: ignore
     # Metadata Dropdowns
     LanguageListView,
     InterestListView,
+    ReviewTagsView,
     CategoryListCreateView,
     CategoryDetailView,
     # Legal & Helpline
@@ -338,6 +339,7 @@ urlpatterns = [
     # ==========================================
     path('languages/', LanguageListView.as_view(), name='language-list'),
     path('interests/', InterestListView.as_view(), name='interest-list'),
+    path('review-tags/', ReviewTagsView.as_view(), name='review-tags'),
 
     path('categories/', CategoryListCreateView.as_view(), name='category-list-create'),
     path('categories', CategoryListCreateView.as_view()),

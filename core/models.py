@@ -363,6 +363,7 @@ class Call(models.Model):
 class CallReview(models.Model):
     call = models.OneToOneField(Call, on_delete=models.CASCADE, related_name='review')
     rating = models.PositiveSmallIntegerField(default=5, help_text="1 to 5 stars")
+    tags = models.JSONField(default=list, blank=True, help_text="Selected positive review tags")
     feedback = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 

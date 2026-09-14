@@ -97,6 +97,7 @@ from .serializers import (  # type: ignore
     AgentSessionSerializer,
     FCMTokenUpdateSerializer,
 )
+from .constants import ALLOWED_REVIEW_TAGS
 
 
 
@@ -2747,6 +2748,7 @@ class CallReviewCreateView(APIView):
             }, status=status.HTTP_400_BAD_REQUEST)
 
         rating = serializer.validated_data['rating']
+        tags = serializer.validated_data.get('tags', [])
         comment = serializer.validated_data.get('comment', '').strip()
 
         with transaction.atomic():
@@ -2789,6 +2791,7 @@ class CallReviewCreateView(APIView):
                 review = CallReview.objects.create(
                     call=call,
                     rating=rating,
+                    tags=tags,
                     feedback=comment
                 )
             except IntegrityError:
@@ -2817,6 +2820,7 @@ class CallReviewCreateView(APIView):
                     "id": review.id,
                     "call_id": call.id,
                     "rating": review.rating,
+                    "tags": review.tags or [],
                     "comment": review.feedback,
                     "created_at": review.created_at
                 }
@@ -2875,7 +2879,9 @@ class AgentReviewsListView(APIView):
 
             reviews_list.append({
                 "id": r.id,
+                "call_id": r.call_id,
                 "rating": r.rating,
+                "tags": r.tags or [],
                 "comment": r.feedback,
                 "caller_name": caller_display,
                 "created_at": r.created_at
@@ -2891,6 +2897,22 @@ class AgentReviewsListView(APIView):
                 "total_reviews": total_reviews,
                 "reviews": reviews_list
             }
+        }, status=status.HTTP_200_OK)
+
+
+class ReviewTagsView(APIView):
+    """
+    Get allowed positive review tags for the review UI.
+    GET /api/review-tags/
+    Authentication: Public / AllowAny (available to callers and all clients)
+    """
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request, *args, **kwargs):
+        return Response({
+            "success": True,
+            "message": "Review tags retrieved successfully.",
+            "data": ALLOWED_REVIEW_TAGS
         }, status=status.HTTP_200_OK)
 
 

@@ -66,6 +66,7 @@ from core.views import (
     CallDetailView,
     CallReviewCreateView,
     AgentReviewsListView,
+    ReviewTagsView,
     CallerAccountDeleteView,
     CallerFavoritesView,
     CallerFavoriteDetailView,
@@ -520,6 +521,7 @@ urlpatterns = [
 
     path('api/calls/<int:call_id>/review/', CallReviewCreateView.as_view(), name='call-review-create'),
     path('api/agents/<int:agent_user_id>/reviews/', AgentReviewsListView.as_view(), name='api-agent-reviews-list'),
+    path('api/review-tags/', ReviewTagsView.as_view(), name='api-review-tags'),
 
     # Double-prefix safety for call workflow
     path('api/api/calls/request/', CallRequestView.as_view()),

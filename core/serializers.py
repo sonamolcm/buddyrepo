@@ -18,6 +18,7 @@ from .models import (
     AgentEarning,
     AgentPayout,
 )
+from .constants import ALLOWED_REVIEW_TAGS
 
 
 def normalize_interests(raw_val) -> list:
@@ -522,11 +523,17 @@ class CallReviewSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = CallReview
-        fields = ('id', 'call_id', 'rating', 'comment', 'created_at')
+        fields = ('id', 'call_id', 'rating', 'tags', 'comment', 'created_at')
 
 
 class CallReviewCreateSerializer(serializers.Serializer):
     rating = serializers.IntegerField(required=True)
+    tags = serializers.ListField(
+        child=serializers.CharField(),
+        required=False,
+        default=list,
+        allow_empty=True
+    )
     comment = serializers.CharField(required=False, allow_blank=True, max_length=1000, default="")
 
     def validate_rating(self, value):
@@ -537,6 +544,26 @@ class CallReviewCreateSerializer(serializers.Serializer):
         if not (1 <= val <= 5):
             raise serializers.ValidationError("Rating must be an integer between 1 and 5.")
         return val
+
+    def validate_tags(self, value):
+        if value is None:
+            return []
+        if not isinstance(value, list):
+            raise serializers.ValidationError("Tags must be a list of strings.")
+        if len(value) > 8:
+            raise serializers.ValidationError("A maximum of 8 tags can be selected.")
+        seen = set()
+        for tag in value:
+            if not isinstance(tag, str):
+                raise serializers.ValidationError("Each tag must be a string.")
+            if tag in seen:
+                raise serializers.ValidationError(f"Duplicate tag '{tag}' is not allowed.")
+            seen.add(tag)
+            if tag not in ALLOWED_REVIEW_TAGS:
+                raise serializers.ValidationError(
+                    f"'{tag}' is not a valid review tag. Allowed tags: {', '.join(ALLOWED_REVIEW_TAGS)}."
+                )
+        return value
 
     def validate(self, attrs):
         initial = getattr(self, 'initial_data', {})

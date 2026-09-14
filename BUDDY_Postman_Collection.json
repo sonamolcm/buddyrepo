@@ -50,6 +50,21 @@
       "key": "loginOtp",
       "value": "",
       "type": "string"
+    },
+    {
+      "key": "caller_access_token",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "call_id",
+      "value": "1",
+      "type": "string"
+    },
+    {
+      "key": "agent_user_id",
+      "value": "1",
+      "type": "string"
     }
   ],
   "item": [
@@ -805,6 +820,57 @@
               "host": ["{{baseUrl}}"],
               "path": ["favourites", ""]
             }
+          }
+        }
+      ]
+    },
+    {
+      "name": "6. Reviews & Ratings",
+      "item": [
+        {
+          "name": "Get Review Tags (GET /review-tags/)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/review-tags/",
+              "host": ["{{baseUrl}}"],
+              "path": ["review-tags", ""]
+            },
+            "description": "Returns allowed review tags for client UI chips."
+          }
+        },
+        {
+          "name": "Submit Call Review (POST /calls/:call_id/review/)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{caller_access_token}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"rating\": 5,\n  \"tags\": [\n    \"Great Listener\",\n    \"Very Empathetic\",\n    \"Helpful Advice\"\n  ],\n  \"comment\": \"Really enjoyed the conversation. Very helpful and kind.\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/calls/{{call_id}}/review/",
+              "host": ["{{baseUrl}}"],
+              "path": ["calls", "{{call_id}}", "review", ""]
+            },
+            "description": "Caller submits rating (1-5), optional tags, and optional comment for a completed call."
+          }
+        },
+        {
+          "name": "Get Agent Reviews List (GET /agents/:agent_user_id/reviews/)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/agents/{{agent_user_id}}/reviews/",
+              "host": ["{{baseUrl}}"],
+              "path": ["agents", "{{agent_user_id}}", "reviews", ""]
+            },
+            "description": "Public list of reviews received by an agent, including tags, caller display name, and average rating."
           }
         }
       ]
