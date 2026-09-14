@@ -1003,5 +1003,189 @@ class DirectAgentCallFlowTestCase(TestCase):
         self.assertEqual(res.data['category']['id'], self.category.id)
 
 
+class CallReviewAPITestCase(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.category = Category.objects.create(name="Support", is_active=True)
+        self.caller = User.objects.create_user(
+            username="caller_reviewer",
+            phone_number="+919876543311",
+            role="CALLER",
+            first_name="Samantha"
+        )
+        self.other_caller = User.objects.create_user(
+            username="other_caller_99",
+            phone_number="+919876543312",
+            role="CALLER",
+            first_name="Bob"
+        )
+        self.agent = User.objects.create_user(
+            username="agent_reviewee",
+            phone_number="+919876543313",
+            role="LISTENER",
+            first_name="Dr. Neil Patel"
+        )
+        self.agent_profile = ListenerProfile.objects.create(
+            user=self.agent,
+            listener_id="agent_reviewee",
+            name="Dr. Neil Patel",
+            profession=self.category,
+            is_available=True,
+            is_on_duty=True,
+            rating=5.00
+        )
+        self.call = Call.objects.create(
+            caller=self.caller,
+            receiver=self.agent,
+            category=self.category,
+            channel_name="call_support_review_test_01",
+            status="COMPLETED",
+            duration_seconds=180
+        )
+
+    def test_create_review_success(self):
+        self.client.force_authenticate(user=self.caller)
+        payload = {
+            "rating": 5,
+            "comment": "Very helpful and friendly session."
+        }
+        res = self.client.post(f'/api/calls/{self.call.id}/review/', payload, format='json')
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+        self.assertTrue(res.data['success'])
+        self.assertEqual(res.data['message'], "Review submitted successfully.")
+        self.assertEqual(res.data['data']['call_id'], self.call.id)
+        self.assertEqual(res.data['data']['rating'], 5)
+        self.assertEqual(res.data['data']['comment'], "Very helpful and friendly session.")
+        self.assertIn('created_at', res.data['data'])
+
+        # Verify in database
+        review = CallReview.objects.get(call=self.call)
+        self.assertEqual(review.rating, 5)
+        self.assertEqual(review.feedback, "Very helpful and friendly session.")
+
+    def test_create_review_unauthenticated_fails(self):
+        payload = {"rating": 5, "comment": "Good"}
+        res = self.client.post(f'/api/calls/{self.call.id}/review/', payload, format='json')
+        self.assertEqual(res.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_create_review_by_non_caller_fails(self):
+        self.client.force_authenticate(user=self.other_caller)
+        payload = {"rating": 4, "comment": "Trying to review someone else's call"}
+        res = self.client.post(f'/api/calls/{self.call.id}/review/', payload, format='json')
+        self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertFalse(res.data['success'])
+        self.assertIn("only review calls where you were the caller", res.data['message'])
+
+    def test_create_review_by_agent_fails(self):
+        self.client.force_authenticate(user=self.agent)
+        payload = {"rating": 5, "comment": "Agent reviewing self"}
+        res = self.client.post(f'/api/calls/{self.call.id}/review/', payload, format='json')
+        self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertFalse(res.data['success'])
+
+    def test_create_review_call_not_found(self):
+        self.client.force_authenticate(user=self.caller)
+        res = self.client.post('/api/calls/999999/review/', {"rating": 5}, format='json')
+        self.assertEqual(res.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertFalse(res.data['success'])
+
+    def test_create_review_incomplete_call_fails(self):
+        incomplete_call = Call.objects.create(
+            caller=self.caller,
+            receiver=self.agent,
+            category=self.category,
+            channel_name="call_incomplete_test",
+            status="RINGING"
+        )
+        self.client.force_authenticate(user=self.caller)
+        res = self.client.post(f'/api/calls/{incomplete_call.id}/review/', {"rating": 5}, format='json')
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(res.data['success'])
+        self.assertIn("Only completed calls can be reviewed", res.data['message'])
+
+    def test_create_review_invalid_rating(self):
+        self.client.force_authenticate(user=self.caller)
+        # Rating > 5
+        res = self.client.post(f'/api/calls/{self.call.id}/review/', {"rating": 6}, format='json')
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        # Rating < 1
+        res2 = self.client.post(f'/api/calls/{self.call.id}/review/', {"rating": 0}, format='json')
+        self.assertEqual(res2.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_create_review_duplicate_fails(self):
+        self.client.force_authenticate(user=self.caller)
+        res1 = self.client.post(f'/api/calls/{self.call.id}/review/', {"rating": 5, "comment": "First"}, format='json')
+        self.assertEqual(res1.status_code, status.HTTP_201_CREATED)
+
+        res2 = self.client.post(f'/api/calls/{self.call.id}/review/', {"rating": 4, "comment": "Duplicate"}, format='json')
+        self.assertEqual(res2.status_code, status.HTTP_409_CONFLICT)
+        self.assertFalse(res2.data['success'])
+        self.assertIn("already been reviewed", res2.data['message'])
+
+    def test_agent_rating_synchronized_on_review(self):
+        self.client.force_authenticate(user=self.caller)
+        # Submit 4 stars for first call
+        self.client.post(f'/api/calls/{self.call.id}/review/', {"rating": 4}, format='json')
+        self.agent_profile.refresh_from_db()
+        self.assertEqual(float(self.agent_profile.rating), 4.0)
+
+        # Create second completed call for same agent and submit 5 stars
+        call2 = Call.objects.create(
+            caller=self.caller,
+            receiver=self.agent,
+            status="ENDED",
+            channel_name="call_test_sync_2"
+        )
+        self.client.post(f'/api/calls/{call2.id}/review/', {"rating": 5}, format='json')
+        self.agent_profile.refresh_from_db()
+        self.assertEqual(float(self.agent_profile.rating), 4.5)
+
+    def test_get_agent_reviews_success(self):
+        # Create review
+        CallReview.objects.create(
+            call=self.call,
+            rating=5,
+            feedback="Super understanding and warm."
+        )
+        res = self.client.get(f'/api/agents/{self.agent.id}/reviews/')
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertTrue(res.data['success'])
+        self.assertEqual(res.data['data']['agent_id'], self.agent.id)
+        self.assertEqual(res.data['data']['agent_name'], "Dr. Neil Patel")
+        self.assertEqual(res.data['data']['total_reviews'], 1)
+        self.assertEqual(res.data['data']['average_rating'], 5.0)
+        self.assertEqual(len(res.data['data']['reviews']), 1)
+        rev = res.data['data']['reviews'][0]
+        self.assertEqual(rev['rating'], 5)
+        self.assertEqual(rev['comment'], "Super understanding and warm.")
+        self.assertEqual(rev['caller_name'], "Samantha")
+        # Ensure sensitive fields are NOT present
+        self.assertNotIn('caller_id', rev)
+        self.assertNotIn('phone_number', rev)
+        self.assertNotIn('caller_phone', rev)
+
+    def test_get_agent_reviews_non_agent_returns_404(self):
+        res = self.client.get(f'/api/agents/{self.caller.id}/reviews/')
+        self.assertEqual(res.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertFalse(res.data['success'])
+
+    def test_call_history_includes_review_object(self):
+        CallReview.objects.create(
+            call=self.call,
+            rating=5,
+            feedback="Insightful advice."
+        )
+        self.client.force_authenticate(user=self.caller)
+        res = self.client.get('/api/calls/history/')
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertTrue(res.data['success'])
+        call_entry = next((c for c in res.data['data'] if c['id'] == self.call.id), None)
+        self.assertIsNotNone(call_entry)
+        self.assertIsNotNone(call_entry['review'])
+        self.assertEqual(call_entry['review']['rating'], 5)
+        self.assertEqual(call_entry['review']['comment'], "Insightful advice.")
+
+
+
 
 

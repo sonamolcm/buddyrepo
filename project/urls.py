@@ -64,6 +64,8 @@ from core.views import (
     AgoraCallTokenView,
     CallHistoryView,
     CallDetailView,
+    CallReviewCreateView,
+    AgentReviewsListView,
     CallerAccountDeleteView,
     CallerFavoritesView,
     CallerFavoriteDetailView,
@@ -515,6 +517,9 @@ urlpatterns = [
     path('api/call/<int:call_id>/agora-token', AgoraCallTokenView.as_view()),
     path('call/<int:call_id>/agora-token/', AgoraCallTokenView.as_view()),
     path('call/<int:call_id>/agora-token', AgoraCallTokenView.as_view()),
+
+    path('api/calls/<int:call_id>/review/', CallReviewCreateView.as_view(), name='call-review-create'),
+    path('api/agents/<int:agent_user_id>/reviews/', AgentReviewsListView.as_view(), name='api-agent-reviews-list'),
 
     # Double-prefix safety for call workflow
     path('api/api/calls/request/', CallRequestView.as_view()),

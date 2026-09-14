@@ -518,9 +518,31 @@ class CategorySerializer(serializers.ModelSerializer):
 # 7. CALL & CALL HISTORY SERIALIZERS
 # ==========================================
 class CallReviewSerializer(serializers.ModelSerializer):
+    comment = serializers.CharField(source='feedback', read_only=True)
+
     class Meta:
         model = CallReview
-        fields = ('id', 'rating', 'feedback', 'created_at')
+        fields = ('id', 'call_id', 'rating', 'comment', 'created_at')
+
+
+class CallReviewCreateSerializer(serializers.Serializer):
+    rating = serializers.IntegerField(required=True)
+    comment = serializers.CharField(required=False, allow_blank=True, max_length=1000, default="")
+
+    def validate_rating(self, value):
+        try:
+            val = int(value)
+        except (ValueError, TypeError):
+            raise serializers.ValidationError("Rating must be an integer between 1 and 5.")
+        if not (1 <= val <= 5):
+            raise serializers.ValidationError("Rating must be an integer between 1 and 5.")
+        return val
+
+    def validate(self, attrs):
+        initial = getattr(self, 'initial_data', {})
+        if 'feedback' in initial and not attrs.get('comment'):
+            attrs['comment'] = str(initial['feedback']).strip()[:1000]
+        return attrs
 
 
 class CallHistorySerializer(serializers.ModelSerializer):

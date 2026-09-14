@@ -21,7 +21,7 @@ from django.contrib.auth.tokens import default_token_generator  # type: ignore
 
 logger = logging.getLogger(__name__)
 # pyrefly: ignore [missing-import]
-from django.db import models, transaction  # type: ignore
+from django.db import models, transaction, IntegrityError  # type: ignore
 from django.db.models import Q, Sum, Avg, Count  # type: ignore
 # pyrefly: ignore [missing-import]
 from rest_framework import status, permissions  # type: ignore
@@ -82,6 +82,7 @@ from .serializers import (  # type: ignore
     CoinPurchaseHistorySerializer,
     CallHistorySerializer,
     CallReviewSerializer,
+    CallReviewCreateSerializer,
     CallRequestSerializer,
     IncomingCallSerializer,
     AgentLoginSerializer,
@@ -2721,6 +2722,176 @@ class CallDetailView(APIView):
             return Response({"success": False, "message": "Call record not found."}, status=status.HTTP_404_NOT_FOUND)
         call.delete()
         return Response({"success": True, "message": f"Call record #{call_id} deleted successfully."}, status=status.HTTP_200_OK)
+
+
+class CallReviewCreateView(APIView):
+    """
+    Submit a Review for a Call
+    POST /api/calls/<int:call_id>/review/
+    Authentication: JWT required (Caller only)
+    Request body:
+    {
+        "rating": 5,
+        "comment": "Very helpful and friendly."
+    }
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, call_id, *args, **kwargs):
+        serializer = CallReviewCreateSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response({
+                "success": False,
+                "message": "Validation failed.",
+                "errors": serializer.errors
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        rating = serializer.validated_data['rating']
+        comment = serializer.validated_data.get('comment', '').strip()
+
+        with transaction.atomic():
+            call = Call.objects.select_for_update().filter(id=call_id).select_related('caller', 'receiver').first()
+            if not call:
+                return Response({
+                    "success": False,
+                    "message": "Call not found."
+                }, status=status.HTTP_404_NOT_FOUND)
+
+            # Only the Caller who participated in the call can submit the review
+            if call.caller_id != request.user.id:
+                return Response({
+                    "success": False,
+                    "message": "You can only review calls where you were the caller."
+                }, status=status.HTTP_403_FORBIDDEN)
+
+            # Agent cannot review their own call
+            if call.receiver_id == request.user.id:
+                return Response({
+                    "success": False,
+                    "message": "Agents cannot submit reviews for their own calls."
+                }, status=status.HTTP_403_FORBIDDEN)
+
+            # Review is allowed only after call is COMPLETED or ENDED
+            if call.status not in ('COMPLETED', 'ENDED'):
+                return Response({
+                    "success": False,
+                    "message": f"Cannot review call in status '{call.status}'. Only completed calls can be reviewed."
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            # One review per call only (check existing review)
+            if hasattr(call, 'review') or CallReview.objects.filter(call=call).exists():
+                return Response({
+                    "success": False,
+                    "message": "This call has already been reviewed."
+                }, status=status.HTTP_409_CONFLICT)
+
+            try:
+                review = CallReview.objects.create(
+                    call=call,
+                    rating=rating,
+                    feedback=comment
+                )
+            except IntegrityError:
+                return Response({
+                    "success": False,
+                    "message": "This call has already been reviewed."
+                }, status=status.HTTP_409_CONFLICT)
+
+            # Synchronize Agent's average rating on ListenerProfile
+            agent = call.receiver
+            if agent:
+                agg = CallReview.objects.filter(call__receiver=agent).aggregate(avg_rating=Avg('rating'))
+                if agg['avg_rating'] is not None:
+                    new_rating = round(float(agg['avg_rating']), 2)
+                    if hasattr(agent, 'listener_profile') and agent.listener_profile:
+                        agent.listener_profile.rating = new_rating
+                        agent.listener_profile.save(update_fields=['rating'])
+                    if hasattr(agent, 'buddy_profile') and agent.buddy_profile:
+                        agent.buddy_profile.rating = new_rating
+                        agent.buddy_profile.save(update_fields=['rating'])
+
+            return Response({
+                "success": True,
+                "message": "Review submitted successfully.",
+                "data": {
+                    "id": review.id,
+                    "call_id": call.id,
+                    "rating": review.rating,
+                    "comment": review.feedback,
+                    "created_at": review.created_at
+                }
+            }, status=status.HTTP_201_CREATED)
+
+
+class AgentReviewsListView(APIView):
+    """
+    Retrieve Reviews for an Agent
+    GET /api/agents/<int:agent_user_id>/reviews/
+    Authentication: Public / AllowAny
+    """
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request, agent_user_id, *args, **kwargs):
+        agent = User.objects.filter(id=agent_user_id).first()
+        if not agent:
+            return Response({
+                "success": False,
+                "message": "Agent not found."
+            }, status=status.HTTP_404_NOT_FOUND)
+
+        is_agent = (
+            getattr(agent, 'role', '') in ('LISTENER', 'BUDDY', 'AGENT') or
+            hasattr(agent, 'listener_profile') or
+            hasattr(agent, 'buddy_profile')
+        )
+        if not is_agent:
+            return Response({
+                "success": False,
+                "message": "User is not an agent."
+            }, status=status.HTTP_404_NOT_FOUND)
+
+        agent_name = agent.get_full_name() or agent.username
+        if hasattr(agent, 'listener_profile') and agent.listener_profile and agent.listener_profile.name:
+            agent_name = agent.listener_profile.name
+
+        reviews_qs = CallReview.objects.filter(
+            call__receiver=agent
+        ).select_related('call__caller', 'call__caller__caller_profile').order_by('-created_at')
+
+        agg = reviews_qs.aggregate(avg=Avg('rating'), total=Count('id'))
+        total_reviews = agg['total'] or 0
+        avg_rating = round(float(agg['avg']), 2) if agg['avg'] is not None else 5.0
+
+        reviews_list = []
+        for r in reviews_qs:
+            caller = r.call.caller
+            caller_display = "Anonymous"
+            if caller:
+                if hasattr(caller, 'caller_profile') and caller.caller_profile and caller.caller_profile.name:
+                    caller_display = caller.caller_profile.name
+                else:
+                    first_name = caller.first_name or ""
+                    caller_display = first_name.strip() if first_name.strip() else f"User {caller.id}"
+
+            reviews_list.append({
+                "id": r.id,
+                "rating": r.rating,
+                "comment": r.feedback,
+                "caller_name": caller_display,
+                "created_at": r.created_at
+            })
+
+        return Response({
+            "success": True,
+            "message": "Agent reviews retrieved successfully.",
+            "data": {
+                "agent_id": agent.id,
+                "agent_name": agent_name,
+                "average_rating": avg_rating,
+                "total_reviews": total_reviews,
+                "reviews": reviews_list
+            }
+        }, status=status.HTTP_200_OK)
 
 
 class CallerAccountDeleteView(APIView):
