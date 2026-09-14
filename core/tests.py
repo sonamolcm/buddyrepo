@@ -816,4 +816,192 @@ class FCMCallNotificationTestCase(TestCase):
         self.assertNotIn("privatekey", status_str)
 
 
+class DirectAgentCallFlowTestCase(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.category = Category.objects.create(name="Mental Wellness", is_active=True)
+        self.caller = User.objects.create_user(
+            username="caller_direct_test",
+            phone_number="+919876543271",
+            role="CALLER",
+            first_name="Diana Caller"
+        )
+        self.agent = User.objects.create_user(
+            username="agent_direct_test",
+            phone_number="+919876543272",
+            role="LISTENER",
+            first_name="Dr. Evelyn Stone",
+            fcm_token="agent_direct_token_123"
+        )
+        self.agent_profile = ListenerProfile.objects.create(
+            user=self.agent,
+            listener_id="agent_direct_test",
+            name="Dr. Evelyn Stone",
+            profession=self.category,
+            is_available=True,
+            is_on_duty=True,
+            is_busy=False
+        )
+
+    def test_call_request_with_agent_user_id_success(self):
+        self.client.force_authenticate(user=self.caller)
+        res = self.client.post('/api/calls/request/', {'agent_user_id': self.agent.id}, format='json')
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+        self.assertTrue(res.data['success'])
+        self.assertEqual(res.data['status'], 'RINGING')
+        self.assertEqual(res.data['agent']['id'], self.agent.id)
+        self.assertEqual(res.data['agent']['name'], 'Dr. Evelyn Stone')
+        self.assertEqual(res.data['category']['id'], self.category.id)
+        self.assertEqual(res.data['category']['name'], 'Mental Wellness')
+        self.assertIn('call_id', res.data)
+        self.assertIn('channel_name', res.data)
+        self.assertEqual(res.data['uid'], self.caller.id)
+        self.assertIn('agora_token', res.data)
+        self.assertIn('requested_at', res.data)
+
+        # Ensure Agent is marked busy
+        self.agent_profile.refresh_from_db()
+        self.assertTrue(self.agent_profile.is_busy)
+        self.assertFalse(self.agent_profile.is_available)
+
+        # Verify Call record in DB
+        call = Call.objects.get(id=res.data['call_id'])
+        self.assertEqual(call.caller, self.caller)
+        self.assertEqual(call.receiver, self.agent)
+        self.assertEqual(call.category, self.category)
+        self.assertEqual(call.status, 'RINGING')
+
+    def test_call_request_agent_does_not_exist_returns_404(self):
+        self.client.force_authenticate(user=self.caller)
+        res = self.client.post('/api/calls/request/', {'agent_user_id': 999999}, format='json')
+        self.assertEqual(res.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertFalse(res.data['success'])
+        self.assertIn("does not exist", res.data['message'])
+
+    def test_call_request_agent_inactive_returns_400(self):
+        self.agent.is_active = False
+        self.agent.save(update_fields=['is_active'])
+        self.client.force_authenticate(user=self.caller)
+        res = self.client.post('/api/calls/request/', {'agent_user_id': self.agent.id}, format='json')
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(res.data['success'])
+        self.assertIn("inactive", res.data['message'])
+
+    def test_call_request_user_is_not_agent_returns_400(self):
+        non_agent = User.objects.create_user(
+            username="regular_user_99",
+            phone_number="+919876543279",
+            role="CALLER"
+        )
+        self.client.force_authenticate(user=self.caller)
+        res = self.client.post('/api/calls/request/', {'agent_user_id': non_agent.id}, format='json')
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(res.data['success'])
+        self.assertIn("not an agent or listener", res.data['message'])
+
+    def test_call_request_caller_cannot_call_self_returns_400(self):
+        self.client.force_authenticate(user=self.agent)
+        res = self.client.post('/api/calls/request/', {'agent_user_id': self.agent.id}, format='json')
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(res.data['success'])
+        self.assertIn("cannot place a call to yourself", res.data['message'])
+
+    def test_call_request_busy_agent_returns_400_and_does_not_reassign(self):
+        # Create a second available agent to ensure the system doesn't reassign
+        agent2 = User.objects.create_user(
+            username="agent_second_99",
+            phone_number="+919876543288",
+            role="LISTENER",
+            first_name="Second Agent"
+        )
+        ListenerProfile.objects.create(
+            user=agent2,
+            listener_id="agent_second_99",
+            name="Second Agent",
+            profession=self.category,
+            is_available=True,
+            is_on_duty=True,
+            is_busy=False
+        )
+
+        # Mark targeted agent busy
+        self.agent_profile.is_busy = True
+        self.agent_profile.is_available = False
+        self.agent_profile.save(update_fields=['is_busy', 'is_available'])
+
+        initial_call_count = Call.objects.count()
+        self.client.force_authenticate(user=self.caller)
+        res = self.client.post('/api/calls/request/', {'agent_user_id': self.agent.id}, format='json')
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(res.data['success'])
+        self.assertIn("unavailable or busy", res.data['message'])
+
+        # Confirm NO call was created and agent2 was NOT assigned
+        self.assertEqual(Call.objects.count(), initial_call_count)
+
+    def test_call_request_off_duty_agent_returns_400(self):
+        self.agent_profile.is_on_duty = False
+        self.agent_profile.save(update_fields=['is_on_duty'])
+
+        self.client.force_authenticate(user=self.caller)
+        res = self.client.post('/api/calls/request/', {'agent_user_id': self.agent.id}, format='json')
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(res.data['success'])
+        self.assertIn("unavailable or busy", res.data['message'])
+
+    def test_rejected_call_allows_new_call_and_creates_fresh_record(self):
+        self.client.force_authenticate(user=self.caller)
+        # 1. Create first call
+        res1 = self.client.post('/api/calls/request/', {'agent_user_id': self.agent.id}, format='json')
+        self.assertEqual(res1.status_code, status.HTTP_201_CREATED)
+        call1_id = res1.data['call_id']
+
+        # 2. Agent rejects call
+        self.client.force_authenticate(user=self.agent)
+        res_reject = self.client.post(f'/api/calls/{call1_id}/status/', {'status': 'rejected'}, format='json')
+        self.assertEqual(res_reject.status_code, status.HTTP_200_OK)
+        self.assertEqual(res_reject.data['status'], 'REJECTED')
+
+        call1 = Call.objects.get(id=call1_id)
+        self.assertEqual(call1.status, 'REJECTED')
+
+        # 3. Caller makes a NEW call to the same agent
+        self.client.force_authenticate(user=self.caller)
+        res2 = self.client.post('/api/calls/request/', {'agent_user_id': self.agent.id}, format='json')
+        self.assertEqual(res2.status_code, status.HTTP_201_CREATED)
+        call2_id = res2.data['call_id']
+
+        # Verify a new Call record was created and old call was NOT modified back to RINGING
+        self.assertNotEqual(call1_id, call2_id)
+        call1.refresh_from_db()
+        self.assertEqual(call1.status, 'REJECTED')
+
+        call2 = Call.objects.get(id=call2_id)
+        self.assertEqual(call2.status, 'RINGING')
+
+    def test_ongoing_active_call_prevents_new_call(self):
+        self.client.force_authenticate(user=self.caller)
+        res1 = self.client.post('/api/calls/request/', {'agent_user_id': self.agent.id}, format='json')
+        call_id = res1.data['call_id']
+
+        # Transition call to ACTIVE
+        call = Call.objects.get(id=call_id)
+        call.status = 'ACTIVE'
+        call.save(update_fields=['status'])
+
+        # Attempt to make another call
+        res2 = self.client.post('/api/calls/request/', {'agent_user_id': self.agent.id}, format='json')
+        self.assertEqual(res2.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(res2.data['success'])
+        self.assertIn("ongoing call", res2.data['message'])
+
+    def test_legacy_category_id_request_backward_compatible(self):
+        self.client.force_authenticate(user=self.caller)
+        res = self.client.post('/api/calls/request/', {'category_id': self.category.id}, format='json')
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+        self.assertTrue(res.data['success'])
+        self.assertEqual(res.data['category']['id'], self.category.id)
+
+
+
 

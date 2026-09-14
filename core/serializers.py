@@ -962,19 +962,35 @@ class CallerFavoriteSerializer(serializers.ModelSerializer):
 
 
 class CallRequestSerializer(serializers.Serializer):
-    category_id = serializers.IntegerField(required=True)
+    agent_user_id = serializers.IntegerField(required=False, allow_null=True)
+    category_id = serializers.IntegerField(required=False, allow_null=True)
 
     def validate_category_id(self, value):
-        category = Category.objects.filter(id=value, is_active=True).first()
-        if not category:
-            raise serializers.ValidationError(f"Category with ID {value} does not exist or is inactive.")
+        if value is not None:
+            category = Category.objects.filter(id=value).first()
+            if not category:
+                raise serializers.ValidationError(f"Category with ID {value} does not exist.")
         return value
 
     def validate(self, attrs):
-        initial_data = getattr(self, 'initial_data', {})
-        if 'agent_id' in initial_data or 'listener_id' in initial_data:
+        agent_user_id = attrs.get('agent_user_id')
+        category_id = attrs.get('category_id')
+
+        # Fallback / alias checks from initial data if agent_user_id was not explicitly passed
+        if agent_user_id is None:
+            initial = getattr(self, 'initial_data', {})
+            for alias_key in ('agent_id', 'listener_user_id', 'listener_id'):
+                if alias_key in initial and initial[alias_key] is not None:
+                    try:
+                        agent_user_id = int(initial[alias_key])
+                        attrs['agent_user_id'] = agent_user_id
+                        break
+                    except (ValueError, TypeError):
+                        pass
+
+        if agent_user_id is None and category_id is None:
             raise serializers.ValidationError({
-                "error": "Callers cannot select a specific agent. Please select a category only."
+                "agent_user_id": "Either 'agent_user_id' or 'category_id' must be provided."
             })
         return attrs
 

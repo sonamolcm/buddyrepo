@@ -1850,7 +1850,7 @@ class CallRequestView(APIView):
     1. CALLER REQUESTS A CALL
     POST /api/calls/request/ (or /api/call/request/)
     Authentication: JWT required (or caller resolved via token/params).
-    Request body: {"category_id": 3}
+    Request body: {"agent_user_id": 28} or legacy {"category_id": 3}
     """
     permission_classes = [permissions.AllowAny]
 
@@ -1870,28 +1870,17 @@ class CallRequestView(APIView):
                 "errors": serializer.errors
             }, status=status.HTTP_400_BAD_REQUEST)
 
-        category_id = serializer.validated_data['category_id']
-        category = Category.objects.filter(id=category_id, is_active=True).first()
-        if not category:
-            category = Category.objects.filter(id=category_id).first()
-            if category:
-                category.is_active = True
-                category.save(update_fields=['is_active'])
-            else:
-                category_names = {1: "Doctor", 2: "Mental Health", 3: "Career & Motivation", 4: "Relationships", 5: "Daily Venting"}
-                name = category_names.get(category_id, f"Category {category_id}")
-                category, _ = Category.objects.get_or_create(id=category_id, defaults={'name': name, 'is_active': True})
-
         # Check if caller already has an ongoing call
         existing_call = Call.objects.filter(
             caller=caller,
             status__in=['PENDING', 'RINGING', 'ACCEPTED', 'ACTIVE']
         ).first()
         if existing_call:
-            # For testing convenience, if in ringing/pending state from earlier test, cancel it
+            # If in ringing/pending state from earlier attempt, cancel it and free previous agent
             if existing_call.status in ('PENDING', 'RINGING'):
                 existing_call.status = 'CANCELLED'
-                existing_call.save(update_fields=['status'])
+                existing_call.ended_at = timezone.now()
+                existing_call.save(update_fields=['status', 'ended_at'])
                 set_agent_busy(existing_call.receiver, False)
             else:
                 return Response({
@@ -1901,19 +1890,84 @@ class CallRequestView(APIView):
                     "status": existing_call.status
                 }, status=status.HTTP_400_BAD_REQUEST)
 
-        # Find available agent belonging to category
-        agent = find_available_agent_for_category(category)
-        if not agent:
-            return Response({
-                "success": False,
-                "message": "No agent is currently available for this category."
-            }, status=status.HTTP_404_NOT_FOUND)
+        agent_user_id = serializer.validated_data.get('agent_user_id')
+        category_id = serializer.validated_data.get('category_id')
+
+        if agent_user_id is not None:
+            agent = User.objects.filter(id=agent_user_id).first()
+            if not agent:
+                return Response({
+                    "success": False,
+                    "message": "Selected agent does not exist."
+                }, status=status.HTTP_404_NOT_FOUND)
+
+            if not agent.is_active:
+                return Response({
+                    "success": False,
+                    "message": "Selected agent's account is inactive."
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            is_agent_role = getattr(agent, 'role', None) in ('LISTENER', 'BUDDY', 'AGENT')
+            has_agent_profile = hasattr(agent, 'listener_profile') or hasattr(agent, 'buddy_profile')
+            if not (is_agent_role or has_agent_profile):
+                return Response({
+                    "success": False,
+                    "message": "Selected user is not an agent or listener."
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            if agent.id == caller.id:
+                return Response({
+                    "success": False,
+                    "message": "You cannot place a call to yourself."
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            if not is_agent_available(agent):
+                return Response({
+                    "success": False,
+                    "message": "Selected agent is currently unavailable or busy."
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            # Resolve Category from Agent's ListenerProfile.profession
+            category = None
+            if hasattr(agent, 'listener_profile') and agent.listener_profile.profession:
+                category = agent.listener_profile.profession
+            elif hasattr(agent, 'buddy_profile') and agent.buddy_profile.profession:
+                category = agent.buddy_profile.profession
+            elif category_id:
+                category = Category.objects.filter(id=category_id).first()
+
+            if not category:
+                category = Category.objects.filter(is_active=True).first()
+                if not category:
+                    category, _ = Category.objects.get_or_create(name="General", defaults={'is_active': True})
+
+        else:
+            # Fallback to category-based assignment if agent_user_id not provided
+            category = Category.objects.filter(id=category_id, is_active=True).first()
+            if not category:
+                category = Category.objects.filter(id=category_id).first()
+                if category:
+                    category.is_active = True
+                    category.save(update_fields=['is_active'])
+                else:
+                    category_names = {1: "Doctor", 2: "Mental Health", 3: "Career & Motivation", 4: "Relationships", 5: "Daily Venting"}
+                    name = category_names.get(category_id, f"Category {category_id}")
+                    category, _ = Category.objects.get_or_create(id=category_id, defaults={'name': name, 'is_active': True})
+
+            # Find available agent belonging to category
+            agent = find_available_agent_for_category(category)
+            if not agent:
+                return Response({
+                    "success": False,
+                    "message": "No agent is currently available for this category."
+                }, status=status.HTTP_404_NOT_FOUND)
 
         # Mark Agent busy
         set_agent_busy(agent, True)
 
         now = timezone.now()
-        channel_name = f"call_{category.id}_{caller.id}_{agent.id}_{int(now.timestamp())}"
+        cat_id = category.id if category else 0
+        channel_name = f"call_{cat_id}_{caller.id}_{agent.id}_{int(now.timestamp())}"
 
         call = Call.objects.create(
             caller=caller,
@@ -1962,8 +2016,8 @@ class CallRequestView(APIView):
             "call_id": call.id,
             "status": "RINGING",
             "category": {
-                "id": category.id,
-                "name": category.name,
+                "id": category.id if category else None,
+                "name": category.name if category else "General",
             },
             "agent": {
                 "id": agent.id,
@@ -2193,10 +2247,38 @@ def _handle_call_status_update(request, call_id, target_status):
             ok, resp_data, status_code = complete_call_session(call, request.user)
             return Response(resp_data, status=status_code)
 
+        # 4. CANCELLED
+        elif target_status == 'CANCELLED':
+            if request.user.id not in (call.caller_id, call.receiver_id):
+                return Response({
+                    "success": False,
+                    "message": "You do not belong to this call."
+                }, status=status.HTTP_403_FORBIDDEN)
+
+            if call.status not in ('RINGING', 'PENDING'):
+                return Response({
+                    "success": False,
+                    "message": f"Cannot cancel call in status '{call.status}'."
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            now = timezone.now()
+            call.status = 'CANCELLED'
+            call.ended_at = now
+            call.save(update_fields=['status', 'ended_at'])
+
+            set_agent_busy(call.receiver, False)
+
+            return Response({
+                "success": True,
+                "message": "Call cancelled successfully.",
+                "call_id": call.id,
+                "status": "CANCELLED"
+            }, status=status.HTTP_200_OK)
+
         else:
             return Response({
                 "success": False,
-                "message": f"Invalid status '{target_status}'. Supported statuses: 'accepted', 'rejected', 'completed'."
+                "message": f"Invalid status '{target_status}'. Supported statuses: 'accepted', 'rejected', 'completed', 'cancelled'."
             }, status=status.HTTP_400_BAD_REQUEST)
 
 
@@ -2209,6 +2291,7 @@ class CallStatusUpdateView(APIView):
       - "accepted": Agent accepts incoming call. Generates Agora audio token for Agent.
       - "rejected": Agent rejects call. Frees Agent availability.
       - "completed": Caller or Agent ends call. Settles wallet balance/earnings and restores duty availability.
+      - "cancelled": Caller or Agent cancels ringing call. Frees Agent availability.
     """
     permission_classes = [permissions.IsAuthenticated]
 
@@ -2217,7 +2300,7 @@ class CallStatusUpdateView(APIView):
         if not status_raw or not isinstance(status_raw, str):
             return Response({
                 "success": False,
-                "message": "The 'status' field is required. Supported statuses: 'accepted', 'rejected', 'completed'."
+                "message": "The 'status' field is required. Supported statuses: 'accepted', 'rejected', 'completed', 'cancelled'."
             }, status=status.HTTP_400_BAD_REQUEST)
 
         target_status = status_raw.strip().upper()
@@ -3295,81 +3378,103 @@ def serialize_listener_user(user, request=None):
     }
 
 
+def ensure_sample_category_listeners(category=None):
+    if not category:
+        return []
+
+    users = User.objects.filter(
+        Q(listener_profile__profession=category) | Q(buddy_profile__profession=category),
+        is_active=True
+    ).select_related('listener_profile', 'buddy_profile').distinct()
+
+    if not users.exists():
+        from core.sample_data import SAMPLE_CATEGORY_LISTENERS
+        cat_key = next((k for k in SAMPLE_CATEGORY_LISTENERS if k.lower() == category.name.lower()), None)
+        sample_list = SAMPLE_CATEGORY_LISTENERS.get(cat_key, []) if cat_key else []
+
+        if not sample_list:
+            sample_list = [
+                {
+                    "username": f"listener_{category.name.lower().replace(' ', '_')}_1",
+                    "name": f"{category.name} Specialist",
+                    "gender": "Other",
+                    "language": "English",
+                    "bio": f"Experienced professional in {category.name}. Available for friendly guidance and conversation.",
+                    "interests": ["Career & Motivation", "Friendly Chat", "Active Listening"],
+                    "rate_per_second": 3,
+                    "rating": 4.9,
+                    "password": "ListenerPass123!"
+                }
+            ]
+
+        for item in sample_list:
+            u, _ = User.objects.get_or_create(
+                username=item["username"],
+                defaults={
+                    "first_name": item["name"],
+                    "role": "LISTENER",
+                    "gender": item.get("gender", "Other"),
+                    "is_active": True,
+                    "is_verified": True,
+                    "is_profile_completed": True
+                }
+            )
+            if not u.has_usable_password():
+                u.set_password(item.get("password", "ListenerPass123!"))
+                u.save()
+
+            rate_sec = item.get("rate_per_second", 3)
+            lp, _ = ListenerProfile.objects.get_or_create(
+                user=u,
+                defaults={
+                    "listener_id": item["username"],
+                    "name": item["name"],
+                    "profession": category,
+                    "gender": item.get("gender", "Other"),
+                    "language": item.get("language", "English"),
+                    "bio": item.get("bio", ""),
+                    "interests": item.get("interests", []),
+                    "rate_per_second": rate_sec,
+                    "rating": item.get("rating", 4.9),
+                    "is_available": True,
+                    "is_on_duty": True,
+                    "is_verified": True
+                }
+            )
+            needs_save = False
+            if not lp.profession:
+                lp.profession = category
+                needs_save = True
+            if not lp.name:
+                lp.name = item["name"]
+                needs_save = True
+            if not lp.is_available or not lp.is_on_duty:
+                lp.is_available = True
+                lp.is_on_duty = True
+                needs_save = True
+            if not lp.is_verified:
+                lp.is_verified = True
+                needs_save = True
+            if needs_save:
+                lp.save()
+
+            Wallet.objects.get_or_create(user=u, defaults={'balance': 50})
+
+        users = User.objects.filter(
+            Q(listener_profile__profession=category) | Q(buddy_profile__profession=category),
+            is_active=True
+        ).select_related('listener_profile', 'buddy_profile').distinct()
+
+    return users
+
+
 def ensure_sample_doctors(doctor_category=None):
     if not doctor_category:
         doctor_category = Category.objects.filter(name__iexact="Doctor", is_active=True).first()
     if not doctor_category:
         return []
+    return ensure_sample_category_listeners(doctor_category)
 
-    users = User.objects.filter(
-        Q(listener_profile__profession=doctor_category) | Q(buddy_profile__profession=doctor_category),
-        is_active=True
-    ).select_related('listener_profile', 'buddy_profile').distinct()
-
-    if not users.exists():
-        sample_docs = [
-            {
-                "username": "dr_sarah_jenkins",
-                "name": "Dr. Sarah Jenkins",
-                "gender": "Female",
-                "language": "English",
-                "bio": "Experienced General Physician offering consultation on general health, preventive care, and wellness.",
-                "interests": ["Medical Advice", "Health & Wellness", "Friendly Chat"],
-                "rate_per_minute": 180,
-                "rating": 4.9
-            },
-            {
-                "username": "dr_arun_kumar",
-                "name": "Dr. Arun Kumar",
-                "gender": "Male",
-                "language": "English, Malayalam, Hindi",
-                "bio": "Consultant Physician specializing in lifestyle medicine, second opinions, and routine health counseling.",
-                "interests": ["Clinical Consultation", "Stress & Anxiety", "Health Guidance"],
-                "rate_per_minute": 180,
-                "rating": 4.8
-            }
-        ]
-        for doc in sample_docs:
-            u, _ = User.objects.get_or_create(
-                username=doc["username"],
-                defaults={
-                    "first_name": doc["name"],
-                    "role": "LISTENER",
-                    "is_active": True,
-                    "is_verified": True
-                }
-            )
-            if not u.has_usable_password():
-                u.set_password("DoctorPass123!")
-                u.save()
-            lp, _ = ListenerProfile.objects.get_or_create(
-                user=u,
-                defaults={
-                    "listener_id": doc["username"],
-                    "name": doc["name"],
-                    "profession": doctor_category,
-                    "gender": doc["gender"],
-                    "language": doc["language"],
-                    "bio": doc["bio"],
-                    "interests": doc["interests"],
-                    "rate_per_minute": doc["rate_per_minute"],
-                    "rate_per_second": doc["rate_per_minute"] // 60,
-                    "rating": doc["rating"],
-                    "is_available": True,
-                    "is_verified": True
-                }
-            )
-            if not lp.profession:
-                lp.profession = doctor_category
-                lp.name = doc["name"]
-                lp.save(update_fields=['profession', 'name'])
-
-        users = User.objects.filter(
-            Q(listener_profile__profession=doctor_category) | Q(buddy_profile__profession=doctor_category),
-            is_active=True
-        ).select_related('listener_profile', 'buddy_profile').distinct()
-
-    return users
 
 
 class CategoryListCreateView(APIView):
@@ -3423,10 +3528,9 @@ class CategoryListCreateView(APIView):
         else:
             categories = categories.order_by('id')
 
-        # Ensure sample doctors exist if Doctor category is in results
-        doc_cat = next((c for c in categories if c.name.lower() in ('doctor', 'doctors')), None)
-        if doc_cat:
-            ensure_sample_doctors(doc_cat)
+        # Ensure sample listeners exist for all active categories in results
+        for cat in categories:
+            ensure_sample_category_listeners(cat)
 
         # Prefetch users for all active categories in this queryset
         users_qs = User.objects.filter(
@@ -3548,13 +3652,7 @@ class CategoryDetailView(APIView):
                 status=status.HTTP_404_NOT_FOUND
             )
 
-        if category.name.lower() in ('doctor', 'doctors'):
-            users = ensure_sample_doctors(category)
-        else:
-            users = User.objects.filter(
-                Q(listener_profile__profession=category) | Q(buddy_profile__profession=category),
-                is_active=True
-            ).select_related('listener_profile', 'buddy_profile').distinct()
+        users = ensure_sample_category_listeners(category)
 
         matches = [serialize_listener_user(u, request) for u in users]
 
