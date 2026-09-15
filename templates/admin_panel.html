@@ -1568,12 +1568,9 @@
             <input type="text" id="conv-name" name="name" class="form-input" placeholder="e.g. Arun Kumar" required>
           </div>
           <div class="form-group">
-            <label class="form-label">Call Rate (Coins / Second) *</label>
-            <select id="conv-rate" name="rate_per_second" class="form-input" required>
-              <option value="3">3 Coins/sec (180 Coins/minute)</option>
-              <option value="5" selected>5 Coins/sec (300 Coins/minute)</option>
-              <option value="10">10 Coins/sec (600 Coins/minute)</option>
-            </select>
+            <label class="form-label">Call Rate (Fixed Standard)</label>
+            <input type="text" class="form-input" value="5 Coins/sec (300 Coins/minute)" readonly style="background: var(--bg-hover); color: var(--text); font-weight: 600; cursor: not-allowed;">
+            <input type="hidden" id="conv-rate" name="rate_per_second" value="5">
           </div>
         </div>
 
