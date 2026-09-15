@@ -193,6 +193,34 @@ class CallerProfile(models.Model):
         return f"Caller: {self.name or self.user.username} ({self.user.phone_number})"
 
 
+AGENT_INTEREST_OPTIONS = [
+    "Conversation",
+    "Friendship",
+    "Companionship",
+    "Advice",
+    "Motivation",
+    "Listening",
+    "Human connection",
+]
+
+
+def generate_agent_id(user_id: int) -> str:
+    """
+    Generates a unique Agent ID with minimum 5-digit zero-padding (e.g. User 42 -> AGT00042).
+    Expands dynamically for larger user IDs (e.g. User 123456 -> AGT123456).
+    Guarantees database-level uniqueness against existing records.
+    """
+    base_id = f"AGT{int(user_id):05d}"
+    candidate = base_id
+    counter = 1
+    while ListenerProfile.objects.filter(
+        models.Q(agent_id=candidate) | models.Q(listener_id=candidate)
+    ).exclude(user_id=user_id).exists():
+        candidate = f"{base_id}_{counter}"
+        counter += 1
+    return candidate
+
+
 class ListenerProfile(models.Model):
     RATE_CHOICES = (
         (3, '3 Coins/sec'),
@@ -201,6 +229,7 @@ class ListenerProfile(models.Model):
     )
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='listener_profile')
     listener_id = models.CharField(max_length=30, unique=True, db_index=True)
+    agent_id = models.CharField(max_length=30, unique=True, null=True, blank=True, db_index=True)
     name = models.CharField(max_length=100, blank=True)
     profession = models.ForeignKey('Category', on_delete=models.SET_NULL, null=True, blank=True, related_name='listeners')
     conversation_categories = models.ManyToManyField(
@@ -221,6 +250,21 @@ class ListenerProfile(models.Model):
     is_busy = models.BooleanField(default=False)
     is_available = models.BooleanField(default=False)
     is_verified = models.BooleanField(default=False)
+
+    # Sensitive Bank Details (Protected - accessible only via Admin endpoint)
+    account_holder_name = models.CharField(max_length=150, blank=True, default='')
+    account_number = models.CharField(max_length=50, blank=True, default='')
+    ifsc_code = models.CharField(max_length=20, blank=True, default='')
+    bank_name = models.CharField(max_length=100, blank=True, default='')
+    upi_id = models.CharField(max_length=100, blank=True, default='')
+
+    # Identity / Verification Details (Protected - accessible only via Admin endpoint)
+    id_document = models.FileField(upload_to='agent_docs/', null=True, blank=True)
+    id_type = models.CharField(max_length=50, blank=True, default='')
+    id_number = models.CharField(max_length=50, blank=True, default='')
+    verification_notes = models.TextField(blank=True, default='')
+    verified_at = models.DateTimeField(null=True, blank=True)
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -247,7 +291,7 @@ class ListenerProfile(models.Model):
         return self.is_available
 
     def __str__(self):
-        return f"Agent [{self.listener_id}]: {self.display_name}"
+        return f"Agent [{self.agent_id or self.listener_id}]: {self.display_name}"
 
 
 AgentProfile = ListenerProfile

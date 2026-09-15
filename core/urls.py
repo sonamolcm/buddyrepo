@@ -99,11 +99,20 @@ from .views import (  # type: ignore
     # Live Admin Actions
     AdminPayoutActionView,
     AdminUserToggleStatusView,
+    AdminUserRoleChangeView,
+    AdminAgentDetailsView,
+    AgentInterestsListView,
     FCMTokenUpdateView,
 )
 
 urlpatterns = [
-    # Admin Live Action Routes
+    # Admin Live Action Routes & User Role Management
+    path('admin/users/<int:user_id>/role/', AdminUserRoleChangeView.as_view(), name='admin-user-role-change'),
+    path('admin/users/<int:user_id>/role', AdminUserRoleChangeView.as_view()),
+    path('admin/users/<int:user_id>/agent-details/', AdminAgentDetailsView.as_view(), name='admin-agent-details'),
+    path('admin/users/<int:user_id>/agent-details', AdminAgentDetailsView.as_view()),
+    path('agent/interests/', AgentInterestsListView.as_view(), name='agent-interests-list'),
+    path('agent/interests', AgentInterestsListView.as_view()),
     path('admin/withdrawals/<int:payout_id>/action/', AdminPayoutActionView.as_view(), name='admin-payout-action'),
     path('admin/withdrawals/<int:payout_id>/action', AdminPayoutActionView.as_view()),
     path('admin/users/<int:user_id>/toggle/', AdminUserToggleStatusView.as_view(), name='admin-user-toggle'),
@@ -397,8 +406,9 @@ urlpatterns = [
     # ==========================================
     # 7. ADMIN LISTENER MANAGEMENT API (LEGACY ALIASES)
     # ==========================================
-    path('admin/listeners/create/', AdminCreateListenerView.as_view(), name='api-admin-create-listener'),
-    path('admin/listeners/create', AdminCreateListenerView.as_view()),
+    # [DEPRECATED / PRESERVED] Standalone create listener routes - superseded by admin/users/<id>/role/
+    # path('admin/listeners/create/', AdminCreateListenerView.as_view(), name='api-admin-create-listener'),
+    # path('admin/listeners/create', AdminCreateListenerView.as_view()),
     path('admin/listeners/delete/', AdminDeleteListenerView.as_view(), name='api-admin-delete-listener'),
     path('admin/listeners/delete', AdminDeleteListenerView.as_view()),
     path('admin/listeners/', AdminListenerListView.as_view(), name='api-admin-list-listeners'),

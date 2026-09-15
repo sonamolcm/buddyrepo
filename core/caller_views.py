@@ -38,7 +38,8 @@ def admin_panel_view(request: HttpRequest) -> HttpResponse:
         WalletTransaction,
         Category,
         AgentPayout,
-        AgentEarning
+        AgentEarning,
+        AGENT_INTEREST_OPTIONS
     )
     from django.db.models import Sum, Count, Q
     from core.views import WORLD_LANGUAGES
@@ -98,6 +99,7 @@ def admin_panel_view(request: HttpRequest) -> HttpResponse:
         'all_users': all_users,
         'categories': categories,
         'world_languages': WORLD_LANGUAGES,
+        'agent_interest_options': [opt[0] for opt in AGENT_INTEREST_OPTIONS],
         'payouts': payouts,
         'wallet_transactions': wallet_transactions,
         'agent_earnings': agent_earnings,
@@ -190,6 +192,8 @@ def admin_live_data_api(request: HttpRequest) -> HttpResponse:
                 'phone': u.phone_number or '',
                 'role': u.role,
                 'is_listener': u.is_listener,
+                'is_agent': u.is_agent,
+                'agent_id': (getattr(lp, 'agent_id', None) or getattr(lp, 'listener_id', '')) if (lp and u.is_listener) else None,
                 'coins': bal,
                 'is_earned': is_earned,
                 'is_verified': bool(u.is_verified),

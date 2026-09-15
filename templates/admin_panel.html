@@ -703,12 +703,13 @@
       </li>
       -->
 
-      <!-- 5. CREATE AGENT -->
+      <!-- 5. CREATE AGENT (Deprecated - Agents now converted from existing Users)
       <li>
         <button class="nav-btn" onclick="switchTab('create_agent', this)">
           <span>➕</span> Create Agent
         </button>
       </li>
+      -->
 
       <!-- 6. TASK SETTINGS (Commented out)
       <li>
@@ -819,10 +820,10 @@
 
       <!-- Quick Action Cards -->
       <div class="grid-3" style="margin-bottom: 24px;">
-        <div class="card" style="cursor: pointer;" onclick="switchTab('create_agent', document.querySelectorAll('.nav-btn')[4])">
-          <div style="font-size: 24px; margin-bottom: 10px;">➕</div>
-          <h3 style="font-size: 16px; margin-bottom: 6px;">Provision New Agent</h3>
-          <p style="font-size: 12.5px; color: var(--text-muted);">Create verified Agent and Professional Listener profiles with custom rate/sec and category assignment.</p>
+        <div class="card" style="cursor: pointer;" onclick="switchTab('users', document.querySelectorAll('.nav-btn')[2])">
+          <div style="font-size: 24px; margin-bottom: 10px;">👥</div>
+          <h3 style="font-size: 16px; margin-bottom: 6px;">Manage Roles & Agents</h3>
+          <p style="font-size: 12.5px; color: var(--text-muted);">Promote registered users to active Agents with verified ID, interests, and bank details via the User Actions dropdown.</p>
         </div>
 
         <div class="card" style="cursor: pointer;" onclick="switchTab('withdrawals', document.querySelectorAll('.nav-btn')[6])">
@@ -964,7 +965,11 @@
             <h2>User Accounts & Permissions</h2>
             <p style="font-size: 12.5px; color: var(--text-muted); margin-top: 3px;">Manage Callers, Agents, and Administrators</p>
           </div>
-          <button class="btn btn-primary btn-sm" onclick="switchTab('create_agent', document.querySelectorAll('.nav-btn')[4])">+ New Agent</button>
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <span style="font-size: 12px; color: var(--text-muted); background: var(--bg-hover); padding: 5px 10px; border-radius: 6px; border: 1px solid var(--border);">
+              ✨ Promote users to Agent using the Role dropdown in the table below
+            </span>
+          </div>
         </div>
 
         <div class="search-filter-box">
@@ -981,7 +986,7 @@
           <table id="users-table">
             <thead>
               <tr>
-                <th>ID</th>
+                <th>ID / Agent ID</th>
                 <th>Username / Phone</th>
                 <th>Role</th>
                 <th>Wallet Coins</th>
@@ -994,7 +999,14 @@
             <tbody>
               {% for u in all_users %}
               <tr id="user-row-{{ u.id }}" data-search="{{ u.username|lower }} {{ u.phone_number|default:''|lower }} {{ u.first_name|default:''|lower }}" data-role="{{ u.role }}">
-                <td>#{{ u.id }}</td>
+                <td>
+                  #{{ u.id }}
+                  {% if u.is_listener and u.listener_profile %}
+                  <div style="font-family: monospace; font-size: 11px; color: var(--primary); font-weight: 700; margin-top: 2px;">
+                    {{ u.listener_profile.agent_id|default:u.listener_profile.listener_id|default:'AGENT' }}
+                  </div>
+                  {% endif %}
+                </td>
                 <td>
                   <strong>{{ u.username }}</strong>
                   {% if u.phone_number %}
@@ -1033,7 +1045,26 @@
                 </td>
                 <td style="color: var(--text-muted);">{{ u.created_at|date:"M d, Y" }}</td>
                 <td>
-                  <div style="display: flex; gap: 6px;">
+                  <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
+                    {% if u.role == 'ADMIN' %}
+                    <span class="badge badge-warning" title="Admin role managed securely via Django Admin">ADMIN</span>
+                    {% else %}
+                    <select class="select-input user-role-select" style="padding: 3px 6px; font-size: 12px; height: 28px; width: 86px; border-radius: 6px;"
+                            id="role-select-{{ u.id }}"
+                            data-userid="{{ u.id }}"
+                            data-current-role="{% if u.is_agent %}AGENT{% else %}USER{% endif %}"
+                            onchange="handleUserRoleChange({{ u.id }}, this, '{{ u.username|escapejs }}', '{{ u.phone_number|default:''|escapejs }}', '{{ u.first_name|default:''|escapejs }}')">
+                      <option value="USER" {% if not u.is_agent %}selected{% endif %}>User</option>
+                      <option value="AGENT" {% if u.is_agent %}selected{% endif %}>Agent</option>
+                    </select>
+                    {% endif %}
+
+                    {% if u.is_agent %}
+                    <button class="btn btn-dark btn-sm" style="padding: 3px 8px; font-size: 11px; background: rgba(59, 130, 246, 0.12); color: #3b82f6; border: 1px solid rgba(59, 130, 246, 0.3);" onclick="viewAgentDetails({{ u.id }}, '{{ u.username|escapejs }}')">
+                      Details
+                    </button>
+                    {% endif %}
+
                     <button class="btn btn-dark btn-sm" onclick="toggleUserStatus({{ u.id }}, '{{ u.username }}')">
                       Toggle Status
                     </button>
@@ -1124,8 +1155,9 @@
 
 
     <!-- ========================================== -->
-    <!-- 5. CREATE AGENT TAB                        -->
+    <!-- 5. CREATE AGENT TAB (Preserved Old Code)   -->
     <!-- ========================================== -->
+    <!--
     <div id="tab-create_agent" class="tab-content">
       <div class="card" style="max-width: 800px; margin: 0 auto;">
         <div class="card-header">
@@ -1178,15 +1210,12 @@
                 <button type="button" onclick="clearLanguages()" style="background: none; border: none; color: #94a3b8; font-size: 11px; cursor: pointer; text-decoration: underline;">Clear All</button>
               </div>
 
-              <!-- Main Input Field (Comma separated, directly editable & populated by dropdown) -->
               <input type="text" id="agent-languages" class="form-input" value="English, Hindi" required 
                      placeholder="e.g. English, Malayalam, Hindi" oninput="onLanguageInputManual(this.value)"
                      style="font-weight: 500; letter-spacing: 0.2px;">
 
-              <!-- Visual Selected Language Tag Chips -->
               <div id="selected-lang-tags" style="display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px;"></div>
 
-              <!-- Language Dropdown: Pick one to append after comma -->
               <div style="margin-top: 8px;">
                 <select id="agent-language-picker" class="form-input" onchange="addLanguageFromDropdown(this.value)">
                   <option value="" selected disabled>➕ Choose language to add (appends after comma)...</option>
@@ -1196,7 +1225,6 @@
                 </select>
               </div>
 
-              <!-- Quick Language Select Pills -->
               <div style="margin-top: 8px; display: flex; flex-wrap: wrap; gap: 5px; align-items: center;">
                 <span style="font-size: 11px; color: var(--text-muted); font-weight: 500;">Quick Add:</span>
                 <span class="lang-pill" onclick="toggleLanguagePill('English')">+ English</span>
@@ -1231,6 +1259,7 @@
         </form>
       </div>
     </div>
+    -->
 
 
     <!-- ========================================== -->
@@ -1522,6 +1551,212 @@
     </div>
   </div>
 
+  <!-- MODAL: CONVERT USER TO AGENT -->
+  <div id="modal-agent-conversion" class="modal-overlay">
+    <div class="modal-card" style="max-width: 680px;">
+      <div class="modal-header">
+        <div>
+          <h2 style="font-family: 'Outfit'; font-size: 19px;">✨ Promote User to Agent</h2>
+          <p style="font-size: 12px; color: var(--text-muted); margin-top: 3px;">
+            Target Account: <strong id="conversion-user-label" style="color: var(--primary);">User</strong>
+          </p>
+        </div>
+        <button class="modal-close" onclick="closeAgentConversionModal()">&times;</button>
+      </div>
+
+      <div style="background: rgba(59, 130, 246, 0.08); border-left: 4px solid #3b82f6; padding: 10px 14px; border-radius: 6px; font-size: 12.5px; color: #cbd5e1; margin-bottom: 16px;">
+        💡 Promotes this user to an active Agent, assigns a unique <strong>Agent ID</strong> (e.g. <code>AGT00042</code>), activates their earnings wallet, and configures their professional caller-ready profile.
+      </div>
+
+      <form id="agent-conversion-form" onsubmit="submitAgentConversion(event)" enctype="multipart/form-data">
+        <input type="hidden" id="conv-user-id" name="user_id">
+
+        <!-- 1. Basic Agent Profile Details -->
+        <h3 style="font-size: 14px; font-weight: 700; color: #f8fafc; margin-bottom: 12px; border-bottom: 1px solid var(--border); padding-bottom: 6px;">
+          1. Professional Profile
+        </h3>
+
+        <div class="grid-2">
+          <div class="form-group">
+            <label class="form-label">Display / Listener Name *</label>
+            <input type="text" id="conv-name" name="name" class="form-input" placeholder="e.g. Arun Kumar" required>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Call Rate (Coins / Second) *</label>
+            <select id="conv-rate" name="rate_per_second" class="form-input" required>
+              <option value="3">3 Coins/sec (180 Coins/minute)</option>
+              <option value="5" selected>5 Coins/sec (300 Coins/minute)</option>
+              <option value="10">10 Coins/sec (600 Coins/minute)</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="grid-2">
+          <div class="form-group">
+            <label class="form-label">Spoken Languages (Comma-separated) *</label>
+            <input type="text" id="conv-languages" name="language" class="form-input" value="English, Hindi" required placeholder="e.g. English, Hindi, Malayalam">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Category / Specialty (Optional)</label>
+            <select id="conv-category" name="category" class="form-input">
+              <option value="">General Listener</option>
+              {% for c in categories %}
+              <option value="{{ c.name }}">{{ c.name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Professional Bio / Profile Summary</label>
+          <textarea id="conv-bio" name="bio" class="form-input" rows="2" placeholder="Brief introduction, listening style, counseling background..."></textarea>
+        </div>
+
+        <!-- 7 Agent Interests -->
+        <div class="form-group">
+          <label class="form-label" style="margin-bottom: 6px;">
+            Conversation Interests (Select all that apply)
+          </label>
+          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; background: var(--bg-hover); padding: 12px; border-radius: 10px; border: 1px solid var(--border);">
+            <label style="display: flex; align-items: center; gap: 6px; font-size: 12.5px; cursor: pointer;">
+              <input type="checkbox" name="interests" value="Conversation" class="interest-checkbox" checked>
+              <span>Conversation</span>
+            </label>
+            <label style="display: flex; align-items: center; gap: 6px; font-size: 12.5px; cursor: pointer;">
+              <input type="checkbox" name="interests" value="Friendship" class="interest-checkbox" checked>
+              <span>Friendship</span>
+            </label>
+            <label style="display: flex; align-items: center; gap: 6px; font-size: 12.5px; cursor: pointer;">
+              <input type="checkbox" name="interests" value="Companionship" class="interest-checkbox">
+              <span>Companionship</span>
+            </label>
+            <label style="display: flex; align-items: center; gap: 6px; font-size: 12.5px; cursor: pointer;">
+              <input type="checkbox" name="interests" value="Advice" class="interest-checkbox">
+              <span>Advice</span>
+            </label>
+            <label style="display: flex; align-items: center; gap: 6px; font-size: 12.5px; cursor: pointer;">
+              <input type="checkbox" name="interests" value="Motivation" class="interest-checkbox">
+              <span>Motivation</span>
+            </label>
+            <label style="display: flex; align-items: center; gap: 6px; font-size: 12.5px; cursor: pointer;">
+              <input type="checkbox" name="interests" value="Listening" class="interest-checkbox" checked>
+              <span>Listening</span>
+            </label>
+            <label style="display: flex; align-items: center; gap: 6px; font-size: 12.5px; cursor: pointer;">
+              <input type="checkbox" name="interests" value="Human connection" class="interest-checkbox">
+              <span>Human connection</span>
+            </label>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Profile Photo (Optional)</label>
+          <input type="file" id="conv-profile-photo" name="profile_photo" class="form-input" accept="image/*">
+        </div>
+
+        <!-- 2. Verification & Sensitive Bank Details -->
+        <h3 style="font-size: 14px; font-weight: 700; color: #f8fafc; margin-top: 18px; margin-bottom: 8px; border-bottom: 1px solid var(--border); padding-bottom: 6px; display: flex; align-items: center; gap: 6px;">
+          <span>🔒 Verification & Payout Details</span>
+          <span style="font-size: 11px; font-weight: 500; color: #eab308; background: rgba(234, 179, 8, 0.12); padding: 2px 6px; border-radius: 4px;">Admin-Only Confidential</span>
+        </h3>
+        <p style="font-size: 12px; color: var(--text-muted); margin-bottom: 12px;">
+          These details are strictly stored for KYC and payout purposes and will <strong>never</strong> be exposed to callers, normal logins, or public APIs.
+        </p>
+
+        <div class="grid-2">
+          <div class="form-group">
+            <label class="form-label">Government ID Type</label>
+            <select id="conv-id-type" name="id_type" class="form-input">
+              <option value="">Select ID Type...</option>
+              <option value="Aadhaar">Aadhaar Card</option>
+              <option value="PAN">PAN Card</option>
+              <option value="Passport">Passport</option>
+              <option value="Driving License">Driving License</option>
+              <option value="Voter ID">Voter ID</option>
+              <option value="Other">Other ID</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="form-label">ID Document Number</label>
+            <input type="text" id="conv-id-number" name="id_number" class="form-input" placeholder="e.g. 1234 5678 9012">
+          </div>
+        </div>
+
+        <div class="grid-2">
+          <div class="form-group">
+            <label class="form-label">ID Document File (Photo / PDF)</label>
+            <input type="file" id="conv-id-doc" name="id_document" class="form-input" accept="image/*,application/pdf">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Bank Name</label>
+            <input type="text" id="conv-bank-name" name="bank_name" class="form-input" placeholder="e.g. State Bank of India, HDFC">
+          </div>
+        </div>
+
+        <div class="grid-2">
+          <div class="form-group">
+            <label class="form-label">Account Holder Name</label>
+            <input type="text" id="conv-account-holder" name="account_holder_name" class="form-input" placeholder="Name as per bank passbook">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Bank Account Number</label>
+            <input type="text" id="conv-account-number" name="account_number" class="form-input" placeholder="e.g. 01234567890">
+          </div>
+        </div>
+
+        <div class="grid-2">
+          <div class="form-group">
+            <label class="form-label">IFSC Code</label>
+            <input type="text" id="conv-ifsc" name="ifsc_code" class="form-input" placeholder="e.g. SBIN0001234">
+          </div>
+          <div class="form-group">
+            <label class="form-label">UPI ID (Optional)</label>
+            <input type="text" id="conv-upi-id" name="upi_id" class="form-input" placeholder="e.g. username@upi">
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Admin Verification Notes (Optional)</label>
+          <input type="text" id="conv-verification-notes" name="verification_notes" class="form-input" placeholder="e.g. Verified via call on Sept 15">
+        </div>
+
+        <div id="conversion-error-msg" style="display: none; color: #ef4444; background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.3); border-radius: 8px; padding: 10px; font-size: 13px; margin-top: 10px;"></div>
+
+        <div style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; border-top: 1px solid var(--border); padding-top: 14px;">
+          <button type="button" class="btn btn-dark" onclick="closeAgentConversionModal()">Cancel</button>
+          <button type="submit" class="btn btn-primary" id="btn-submit-conversion">
+            Confirm & Promote to Agent ➔
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- MODAL: AGENT SENSITIVE DETAILS REVIEW -->
+  <div id="modal-agent-details" class="modal-overlay">
+    <div class="modal-card" style="max-width: 620px;">
+      <div class="modal-header">
+        <div>
+          <h2 style="font-family: 'Outfit'; font-size: 19px;">🔒 Confidential Agent Details</h2>
+          <p style="font-size: 12px; color: var(--text-muted); margin-top: 2px;">
+            Accessible only to Admin &bull; Kept private from public and caller APIs
+          </p>
+        </div>
+        <button class="modal-close" onclick="closeModal('modal-agent-details')">&times;</button>
+      </div>
+
+      <div id="agent-details-body" style="padding-top: 4px;">
+        <div style="text-align: center; padding: 24px; color: var(--text-muted);">
+          Loading agent details...
+        </div>
+      </div>
+
+      <div style="display: flex; justify-content: flex-end; margin-top: 18px; border-top: 1px solid var(--border); padding-top: 12px;">
+        <button type="button" class="btn btn-dark" onclick="closeModal('modal-agent-details')">Close</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Toast Notification -->
   <div id="toast" class="toast"></div>
 
@@ -1664,7 +1899,10 @@
       });
     }
 
-    // Provision Agent Submit
+    // ========================================================
+    // PRESERVED OLD CREATE AGENT HANDLER (Backward-compatibility)
+    // ========================================================
+    /*
     async function handleCreateAgentSubmit(e) {
       e.preventDefault();
       const username = document.getElementById('agent-username').value.trim();
@@ -1713,6 +1951,200 @@
       } catch (err) {
         msgBox.style.color = '#f87171';
         msgBox.textContent = 'Server connection error.';
+      }
+    }
+    */
+
+    // ========================================================
+    // NEW USER -> AGENT ROLE WORKFLOW
+    // ========================================================
+    let pendingConversionUserId = null;
+
+    function handleUserRoleChange(userId, selectElem, username, phone, name) {
+      const currentRole = selectElem.getAttribute('data-current-role') || 'USER';
+      const newRole = selectElem.value;
+
+      if (newRole === currentRole) return;
+
+      if (newRole === 'AGENT') {
+        openAgentConversionModal(userId, username, phone, name);
+      } else if (newRole === 'USER') {
+        if (!confirm(`Are you sure you want to demote '${username}' back to a normal User? Their Agent status will be deactivated.`)) {
+          selectElem.value = currentRole;
+          return;
+        }
+        demoteAgentToUser(userId, selectElem);
+      }
+    }
+
+    async function demoteAgentToUser(userId, selectElem) {
+      try {
+        const res = await fetch(`/api/admin/users/${userId}/role/`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ role: 'USER' })
+        });
+        const data = await res.json();
+        if (res.ok && data.success) {
+          showToast(data.message || 'User demoted to standard caller.');
+          selectElem.setAttribute('data-current-role', 'USER');
+          selectElem.value = 'USER';
+          await fetchLiveAdminData(true);
+        } else {
+          showToast(data.message || 'Failed to update user role.', true);
+          selectElem.value = 'AGENT';
+        }
+      } catch (err) {
+        showToast('Network error updating user role.', true);
+        selectElem.value = 'AGENT';
+      }
+    }
+
+    function openAgentConversionModal(userId, username, phone, name) {
+      pendingConversionUserId = userId;
+      const form = document.getElementById('agent-conversion-form');
+      if (form) form.reset();
+
+      document.getElementById('conv-user-id').value = userId;
+      document.getElementById('conversion-user-label').textContent = `${name || username} (#${userId})`;
+      document.getElementById('conv-name').value = name || username;
+      document.getElementById('conv-languages').value = 'English, Hindi';
+      document.getElementById('conv-rate').value = '5';
+      const errBox = document.getElementById('conversion-error-msg');
+      if (errBox) errBox.style.display = 'none';
+
+      // Set default interest checks (Conversation, Friendship, Listening)
+      document.querySelectorAll('.interest-checkbox').forEach(cb => {
+        cb.checked = ['Conversation', 'Friendship', 'Listening'].includes(cb.value);
+      });
+
+      openModal('modal-agent-conversion');
+    }
+
+    function closeAgentConversionModal() {
+      closeModal('modal-agent-conversion');
+      if (pendingConversionUserId) {
+        const sel = document.getElementById(`role-select-${pendingConversionUserId}`);
+        if (sel) {
+          sel.value = sel.getAttribute('data-current-role') || 'USER';
+        }
+        pendingConversionUserId = null;
+      }
+    }
+
+    async function submitAgentConversion(e) {
+      e.preventDefault();
+      const userId = document.getElementById('conv-user-id').value;
+      const submitBtn = document.getElementById('btn-submit-conversion');
+      const errBox = document.getElementById('conversion-error-msg');
+
+      errBox.style.display = 'none';
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Promoting to Agent...';
+
+      try {
+        const formElem = document.getElementById('agent-conversion-form');
+        const formData = new FormData(formElem);
+        formData.set('role', 'AGENT');
+
+        const res = await fetch(`/api/admin/users/${userId}/role/`, {
+          method: 'POST',
+          body: formData
+        });
+
+        const data = await res.json();
+        if (res.ok && data.success) {
+          const assignedId = data.data?.agent_id || 'Assigned';
+          showToast(`✅ Successfully promoted to Agent! ID: ${assignedId}`);
+          pendingConversionUserId = null;
+          closeModal('modal-agent-conversion');
+          await fetchLiveAdminData(true);
+        } else {
+          let errText = data.message || 'Error promoting user to Agent.';
+          if (data.errors) {
+            errText += ' ' + (typeof data.errors === 'object' ? JSON.stringify(data.errors) : data.errors);
+          }
+          errBox.textContent = errText;
+          errBox.style.display = 'block';
+        }
+      } catch (err) {
+        errBox.textContent = 'Server connection error promoting user.';
+        errBox.style.display = 'block';
+      } finally {
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Confirm & Promote to Agent ➔';
+      }
+    }
+
+    async function viewAgentDetails(userId, username) {
+      openModal('modal-agent-details');
+      const body = document.getElementById('agent-details-body');
+      body.innerHTML = '<div style="text-align:center; padding: 24px; color: var(--text-muted);">Loading confidential agent details...</div>';
+
+      try {
+        const res = await fetch(`/api/admin/users/${userId}/agent-details/`);
+        const data = await res.json();
+        if (res.ok && data.success) {
+          const d = data.data;
+          const interestsBadges = (d.interests && d.interests.length > 0)
+            ? d.interests.map(i => `<span class="badge badge-primary" style="margin-right: 4px; margin-bottom: 4px;">${i}</span>`).join('')
+            : '<span style="color:var(--text-muted);">None selected</span>';
+
+          const docLink = d.id_document
+            ? `<a href="${d.id_document}" target="_blank" style="color:var(--primary); font-weight:600; text-decoration:underline;">View Document ↗</a>`
+            : '<span style="color:var(--text-muted);">Not uploaded</span>';
+
+          body.innerHTML = `
+            <div style="background: rgba(59, 130, 246, 0.08); border: 1px solid rgba(59, 130, 246, 0.25); border-radius: 12px; padding: 14px; margin-bottom: 16px;">
+              <div style="display: flex; justify-content: space-between; align-items: center;">
+                <div>
+                  <div style="font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px;">Unique Agent ID</div>
+                  <div style="font-family: monospace; font-size: 20px; font-weight: 700; color: var(--primary);">${d.agent_id || 'N/A'}</div>
+                </div>
+                <div>
+                  <span class="badge ${d.is_available ? 'badge-success' : 'badge-gray'}">${d.is_available ? 'Available' : 'Unavailable'}</span>
+                  <span class="badge badge-primary" style="margin-left: 4px;">${d.rate_per_second || 5} Coins/sec</span>
+                </div>
+              </div>
+              <div style="margin-top: 8px; font-size: 13px;">
+                <strong>${d.name || d.username}</strong> &bull; User #${d.user_id} &bull; ${d.phone_number || 'No phone'}
+              </div>
+              <div style="margin-top: 6px; font-size: 12px; color: var(--text-muted);">
+                Languages: <strong>${d.language || 'English'}</strong>
+              </div>
+            </div>
+
+            <div style="margin-bottom: 14px;">
+              <h4 style="font-size: 13px; font-weight: 600; margin-bottom: 6px;">Conversation Interests:</h4>
+              <div style="display: flex; flex-wrap: wrap;">${interestsBadges}</div>
+            </div>
+
+            <h4 style="font-size: 14px; font-weight: 700; margin-bottom: 8px; border-bottom: 1px solid var(--border); padding-bottom: 4px;">🪪 Identity Verification (KYC)</h4>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; font-size: 13px; margin-bottom: 16px;">
+              <div><span style="color:var(--text-muted);">ID Type:</span> <strong>${d.id_type || 'Not specified'}</strong></div>
+              <div><span style="color:var(--text-muted);">ID Number:</span> <strong>${d.id_number || 'Not specified'}</strong></div>
+              <div style="grid-column: span 2;">
+                <span style="color:var(--text-muted);">Document File:</span> ${docLink}
+              </div>
+              <div style="grid-column: span 2;">
+                <span style="color:var(--text-muted);">Verification Notes:</span> ${d.verification_notes || '<span style="color:var(--text-muted);">None</span>'}
+              </div>
+            </div>
+
+            <h4 style="font-size: 14px; font-weight: 700; margin-bottom: 8px; border-bottom: 1px solid var(--border); padding-bottom: 4px;">🏦 Bank & Payout Details</h4>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; font-size: 13px;">
+              <div><span style="color:var(--text-muted);">Bank Name:</span> <strong>${d.bank_name || 'N/A'}</strong></div>
+              <div><span style="color:var(--text-muted);">Account Holder:</span> <strong>${d.account_holder_name || 'N/A'}</strong></div>
+              <div><span style="color:var(--text-muted);">Account Number:</span> <code style="background:var(--bg-hover); padding: 2px 6px; border-radius: 4px;">${d.account_number || 'N/A'}</code></div>
+              <div><span style="color:var(--text-muted);">IFSC Code:</span> <strong>${d.ifsc_code || 'N/A'}</strong></div>
+              <div style="grid-column: span 2;"><span style="color:var(--text-muted);">UPI ID:</span> <strong>${d.upi_id || 'N/A'}</strong></div>
+            </div>
+          `;
+        } else {
+          body.innerHTML = `<div style="color: #ef4444; padding: 16px;">${data.message || 'Failed to load details.'}</div>`;
+        }
+      } catch (err) {
+        body.innerHTML = '<div style="color: #ef4444; padding: 16px;">Error loading agent details from server.</div>';
       }
     }
 
@@ -1980,10 +2412,11 @@
           const usersTbody = document.querySelector('#users-table tbody');
           if (usersTbody) {
             usersTbody.innerHTML = data.users.map(u => {
+              const isAgent = Boolean(u.is_agent || u.is_listener || u.role === 'LISTENER' || u.role === 'AGENT' || u.role === 'BUDDY');
               let roleBadge = '<span class="badge badge-gray">CALLER</span>';
               if (u.role === 'ADMIN') {
                 roleBadge = '<span class="badge badge-warning">ADMIN</span>';
-              } else if (u.is_listener || u.role === 'LISTENER' || u.role === 'AGENT' || u.role === 'BUDDY') {
+              } else if (isAgent) {
                 roleBadge = '<span class="badge badge-primary">AGENT / LISTENER</span>';
               }
 
@@ -2002,10 +2435,43 @@
 
               const phoneHtml = u.phone ? `<div style="font-size: 12px; color: var(--text-muted);">${u.phone}</div>` : '';
               const searchAttr = `${(u.username||'').toLowerCase()} ${(u.phone||'').toLowerCase()} ${(u.name||'').toLowerCase()}`;
+              const agentIdHtml = (isAgent && u.agent_id) ? `<div style="font-family: monospace; font-size: 11px; color: var(--primary); font-weight: 700; margin-top: 2px;">${u.agent_id}</div>` : '';
+
+              const safeUsername = (u.username || '').replace(/'/g, "\\'");
+              const safePhone = (u.phone || '').replace(/'/g, "\\'");
+              const safeName = (u.name || '').replace(/'/g, "\\'");
+
+              let roleActionHtml = '';
+              if (u.role === 'ADMIN') {
+                roleActionHtml = '<span class="badge badge-warning" title="Admin role managed securely via Django Admin">ADMIN</span>';
+              } else {
+                roleActionHtml = `
+                  <select class="select-input user-role-select" style="padding: 3px 6px; font-size: 12px; height: 28px; width: 86px; border-radius: 6px;"
+                          id="role-select-${u.id}"
+                          data-userid="${u.id}"
+                          data-current-role="${isAgent ? 'AGENT' : 'USER'}"
+                          onchange="handleUserRoleChange(${u.id}, this, '${safeUsername}', '${safePhone}', '${safeName}')">
+                    <option value="USER" ${!isAgent ? 'selected' : ''}>User</option>
+                    <option value="AGENT" ${isAgent ? 'selected' : ''}>Agent</option>
+                  </select>
+                `;
+              }
+
+              let detailsBtnHtml = '';
+              if (isAgent) {
+                detailsBtnHtml = `
+                  <button class="btn btn-dark btn-sm" style="padding: 3px 8px; font-size: 11px; background: rgba(59, 130, 246, 0.12); color: #3b82f6; border: 1px solid rgba(59, 130, 246, 0.3);" onclick="viewAgentDetails(${u.id}, '${safeUsername}')">
+                    Details
+                  </button>
+                `;
+              }
 
               return `
                 <tr id="user-row-${u.id}" data-search="${searchAttr}" data-role="${u.role}">
-                  <td>#${u.id}</td>
+                  <td>
+                    #${u.id}
+                    ${agentIdHtml}
+                  </td>
                   <td>
                     <strong>${u.username}</strong>
                     ${phoneHtml}
@@ -2016,11 +2482,13 @@
                   <td>${activeBadge}</td>
                   <td style="color: var(--text-muted);">${u.created_at || ''}</td>
                   <td>
-                    <div style="display: flex; gap: 6px;">
-                      <button class="btn btn-dark btn-sm" onclick="toggleUserStatus(${u.id}, '${u.username}')">
+                    <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
+                      ${roleActionHtml}
+                      ${detailsBtnHtml}
+                      <button class="btn btn-dark btn-sm" onclick="toggleUserStatus(${u.id}, '${safeUsername}')">
                         Toggle Status
                       </button>
-                      <button class="btn btn-danger btn-sm" onclick="deleteUserAccount(${u.id}, '${u.username}')">
+                      <button class="btn btn-danger btn-sm" onclick="deleteUserAccount(${u.id}, '${safeUsername}')">
                         Delete
                       </button>
                     </div>

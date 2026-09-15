@@ -1826,10 +1826,14 @@ class CallerPhoneLoginTestCase(TestCase):
             is_active=True,
             is_verified=True
         )
+        expected_agent_id = f"AGT{self.listener.id:05d}"
         self.listener_profile, _ = ListenerProfile.objects.get_or_create(
             user=self.listener,
-            defaults={'listener_id': "listener_user_login_test", 'name': "TestListener"}
+            defaults={'listener_id': "listener_user_login_test", 'name': "TestListener", 'agent_id': expected_agent_id}
         )
+        if not self.listener_profile.agent_id:
+            self.listener_profile.agent_id = expected_agent_id
+            self.listener_profile.save(update_fields=['agent_id'])
 
     def test_1_existing_caller_can_request_login_otp(self):
         res = self.client.post('/api/auth/caller/login/send-otp/', {'phone_number': self.caller_phone}, format='json')
@@ -1864,11 +1868,31 @@ class CallerPhoneLoginTestCase(TestCase):
         self.client.post('/api/auth/caller/login/send-otp/', {'phone_number': unregistered}, format='json')
         self.assertFalse(OTPVerification.objects.filter(phone_number=unregistered).exists())
 
-    def test_6_agent_listener_phone_cannot_use_caller_login(self):
-        res = self.client.post('/api/auth/caller/login/send-otp/', {'phone_number': self.listener_phone}, format='json')
-        self.assertEqual(res.status_code, status.HTTP_404_NOT_FOUND)
-        self.assertFalse(res.data['success'])
-        self.assertFalse(res.data['is_registered'])
+    def test_6_active_agent_can_use_standard_phone_otp_login(self):
+        # Step 1: Request login OTP with active Agent phone number
+        send_res = self.client.post('/api/auth/caller/login/send-otp/', {'phone_number': self.listener_phone}, format='json')
+        self.assertEqual(send_res.status_code, status.HTTP_200_OK)
+        self.assertTrue(send_res.data['success'])
+        self.assertIn('otp', send_res.data['data'])
+        otp = send_res.data['data']['otp']
+
+        # Step 2: Verify login OTP
+        verify_res = self.client.post('/api/auth/caller/login/verify-otp/', {
+            'phone_number': self.listener_phone,
+            'otp': otp
+        }, format='json')
+        self.assertEqual(verify_res.status_code, status.HTTP_200_OK)
+        self.assertTrue(verify_res.data['success'])
+
+        # Step 3: Verify is_agent=True and agent_id are returned
+        self.assertIn('is_agent', verify_res.data['data'])
+        self.assertTrue(verify_res.data['data']['is_agent'])
+        self.assertEqual(verify_res.data['data']['agent_id'], self.listener_profile.agent_id)
+        self.assertTrue(verify_res.data['data']['user']['is_agent'])
+        self.assertEqual(verify_res.data['data']['user']['agent_id'], self.listener_profile.agent_id)
+
+    # Maintain backward-compatible test alias
+    test_6_agent_listener_phone_cannot_use_caller_login = test_6_active_agent_can_use_standard_phone_otp_login
 
     def test_7_agent_listener_role_is_not_changed_to_caller(self):
         self.client.post('/api/auth/caller/login/send-otp/', {'phone_number': self.listener_phone}, format='json')

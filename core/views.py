@@ -53,6 +53,8 @@ from .models import (  # type: ignore
     AgentPayout,
     ConversationCategory,
     CALLER_NEED_OPTIONS,
+    AGENT_INTEREST_OPTIONS,
+    generate_agent_id,
 )
 from .permissions import IsAdminUser, IsCallerUser, IsAgentUser  # type: ignore
 # pyrefly: ignore [missing-import]
@@ -94,6 +96,8 @@ from .serializers import (  # type: ignore
     AgentPasswordForgotSerializer,
     AgentPasswordResetSerializer,
     AgentProfileSerializer,
+    AgentConversionSerializer,
+    AdminAgentDetailsSerializer,
     AgentRateSerializer,
     AgentDutySerializer,
     AgentEarningSerializer,
@@ -360,11 +364,17 @@ class CallerSignupCompleteProfileView(APIView):
             "success": True,
             "message": "Caller account created successfully.",
             "data": {
+                "user_id": user.id,
+                "is_agent": False,
+                "agent_id": None,
                 "user": {
                     "id": user.id,
+                    "user_id": user.id,
                     "username": user.username,
                     "phone_number": user.phone_number,
                     "role": user.role,
+                    "is_agent": False,
+                    "agent_id": None,
                     "name": caller_profile.name,
                     "age": caller_profile.age,
                     "gender": caller_profile.gender,
@@ -386,10 +396,10 @@ class CallerSignupCompleteProfileView(APIView):
 # ===================================================
 class CallerLoginSendOTPView(APIView):
     """
-    Caller Login Step 1: Send Login OTP.
-    Rule: Checks whether the phone number belongs to a registered CALLER.
+    Caller / Normal User Login Step 1: Send Login OTP.
+    Rule: Checks whether the phone number belongs to a registered user.
     If not registered: Returns 404 Not Found.
-    If registered: Generates and sends OTP with purpose='LOGIN'.
+    If registered (Caller or converted Agent): Generates and sends OTP with purpose='LOGIN'.
     """
     permission_classes = [permissions.AllowAny]
 
@@ -404,12 +414,12 @@ class CallerLoginSendOTPView(APIView):
 
         phone_number = serializer.validated_data['phone_number'].strip()
 
-        # Check whether phone number belongs to an existing registered CALLER
+        # Check whether phone number belongs to an existing registered user
         user = User.objects.filter(phone_number=phone_number).first()
-        if not user or not getattr(user, 'is_caller', False):
+        if not user:
             return Response({
                 "success": False,
-                "message": "This phone number is not registered as a caller. Please sign up.",
+                "message": "This phone number is not registered. Please sign up.",
                 "is_registered": False,
                 "action": "NAVIGATE_TO_SIGNUP"
             }, status=status.HTTP_404_NOT_FOUND)
@@ -436,9 +446,9 @@ class CallerLoginSendOTPView(APIView):
 
 class CallerLoginVerifyOTPView(APIView):
     """
-    Caller Login Step 2: Verify Login OTP & Authenticate.
+    Caller / Normal User Login Step 2: Verify Login OTP & Authenticate.
     Verifies OTP with purpose='LOGIN', enforces expiry and max attempts.
-    Returns JWT access and refresh tokens along with caller profile.
+    Returns JWT access and refresh tokens, user profile, and Agent status (is_agent, agent_id).
     """
     permission_classes = [permissions.AllowAny]
 
@@ -462,10 +472,10 @@ class CallerLoginVerifyOTPView(APIView):
             }, status=status.HTTP_400_BAD_REQUEST)
 
         user = User.objects.filter(phone_number=phone_number).first()
-        if not user or not getattr(user, 'is_caller', False):
+        if not user:
             return Response({
                 "success": False,
-                "message": "This phone number is not registered as a caller. Please sign up.",
+                "message": "This phone number is not registered. Please sign up.",
                 "is_registered": False,
                 "action": "NAVIGATE_TO_SIGNUP"
             }, status=status.HTTP_404_NOT_FOUND)
@@ -476,7 +486,7 @@ class CallerLoginVerifyOTPView(APIView):
                 "message": "Your account has been deactivated. Please contact support."
             }, status=status.HTTP_403_FORBIDDEN)
 
-        # Retrieve caller profile
+        # Retrieve caller profile if available
         caller_profile, _ = CallerProfile.objects.get_or_create(
             user=user,
             defaults={
@@ -487,21 +497,31 @@ class CallerLoginVerifyOTPView(APIView):
         )
         CallerProfile.objects.filter(user=user).update(is_online=True)
 
+        lp = getattr(user, 'listener_profile', None)
+        is_agent_user = bool(user.is_agent and user.is_active)
+        agent_id = (lp.agent_id or lp.listener_id) if (is_agent_user and lp) else None
+
         refresh = RefreshToken.for_user(user)
 
         return Response({
             "success": True,
             "message": "Login successful",
             "data": {
+                "user_id": user.id,
+                "is_agent": is_agent_user,
+                "agent_id": agent_id,
                 "user": {
                     "id": user.id,
-                    "role": "CALLER",
+                    "user_id": user.id,
+                    "role": user.role,
+                    "is_agent": is_agent_user,
+                    "agent_id": agent_id,
                     "phone_number": user.phone_number,
-                    "name": caller_profile.name,
-                    "age": caller_profile.age,
-                    "gender": caller_profile.gender,
-                    "language": caller_profile.language,
-                    "interests": caller_profile.interests
+                    "name": caller_profile.name if caller_profile else (user.first_name or user.username),
+                    "age": getattr(caller_profile, 'age', None),
+                    "gender": getattr(caller_profile, 'gender', None),
+                    "language": getattr(caller_profile, 'language', 'English'),
+                    "interests": getattr(caller_profile, 'interests', [])
                 },
                 "tokens": {
                     "access": str(refresh.access_token),
@@ -579,10 +599,10 @@ class CallerLoginView(APIView):
                     "success": False,
                     "message": "Invalid phone number or password."
                 }, status=status.HTTP_401_UNAUTHORIZED)
-            if not getattr(user, 'is_caller', False):
+            if not getattr(user, 'is_caller', False) and not getattr(user, 'is_agent', False):
                 return Response({
                     "success": False,
-                    "message": "This account is not a caller account."
+                    "message": "This account is not authorized."
                 }, status=status.HTTP_403_FORBIDDEN)
             if not user.is_active:
                 return Response({
@@ -593,13 +613,24 @@ class CallerLoginView(APIView):
             cp, _ = CallerProfile.objects.get_or_create(user=user)
             CallerProfile.objects.filter(user=user).update(is_online=True)
             refresh = RefreshToken.for_user(user)
+
+            lp = getattr(user, 'listener_profile', None)
+            is_agent_user = bool(user.is_agent and user.is_active)
+            agent_id = (lp.agent_id or lp.listener_id) if (is_agent_user and lp) else None
+
             return Response({
                 "success": True,
                 "message": "Login successful",
                 "data": {
+                    "user_id": user.id,
+                    "is_agent": is_agent_user,
+                    "agent_id": agent_id,
                     "user": {
                         "id": user.id,
-                        "role": "CALLER",
+                        "user_id": user.id,
+                        "role": user.role,
+                        "is_agent": is_agent_user,
+                        "agent_id": agent_id,
                         "phone_number": user.phone_number,
                         "name": cp.name or user.first_name or user.username,
                         "age": cp.age,
@@ -4536,15 +4567,25 @@ class WebVerifyOTPView(APIView):
         else:
             next_step = "ABOUT_YOU"
 
+        lp = getattr(user, 'listener_profile', None)
+        is_agent_user = bool(user.is_agent and user.is_active)
+        agent_id = (lp.agent_id or lp.listener_id) if (is_agent_user and lp) else None
+
         return Response({
             'message': 'Verification successful',
             'is_new_user': created,
             'next_step': next_step,
+            'user_id': user.id,
+            'is_agent': is_agent_user,
+            'agent_id': agent_id,
             'user': {
                 'id': user.id,
+                'user_id': user.id,
                 'first_name': caller_profile.name or getattr(user, 'first_name', '') or user.username,
                 'phone_number': user.phone_number,
                 'role': user.role,
+                'is_agent': is_agent_user,
+                'agent_id': agent_id,
             },
             'access': str(refresh.access_token),
             'refresh': str(refresh),
@@ -4665,94 +4706,264 @@ class WebLoginView(APIView):
 
 
 # ===================================================
-# 8. ADMIN LISTENER MANAGEMENT API (HEADLESS REST API)
+# 8. ADMIN USER ROLE CHANGE & AGENT MANAGEMENT APIS
 # ===================================================
-class AdminCreateListenerView(APIView):
+
+class AdminUserRoleChangeView(APIView):
     """
-    Admin API to create a new Listener username & password:
-    POST /api/admin/listeners/create/
-    Body:
-    {
-        "username": "LISTENER_001",
-        "password": "ListenerPass123!",
-        "language": "English"
-    }
+    Admin endpoint to change a user's role:
+    POST /api/admin/users/<int:user_id>/role/
+
+    Workflows:
+    1. User -> Agent:
+       Promotes a registered user to Agent.
+       Accepts Agent details form data (verification photo/ID, bank details, and the 7 canonical interests).
+       Automatically generates a unique Agent ID (AGT00042) without modifying user_id.
+       Initializes ListenerProfile and AgentWallet.
+    2. Agent -> User:
+       Demotes an Agent back to a normal User (CALLER role), deactivating agent duty.
+    3. User -> Admin:
+       Explicitly rejected here for security. Administrator accounts must be managed via Django Admin.
+    """
+    permission_classes = [permissions.IsAuthenticated, IsAdminUser]
+
+    def post(self, request, user_id):
+        target_user = User.objects.filter(id=user_id).first()
+        if not target_user:
+            return Response({
+                "success": False,
+                "message": f"User with ID {user_id} not found."
+            }, status=status.HTTP_404_NOT_FOUND)
+
+        role_input = (request.data.get('role') or request.data.get('target_role') or '').strip()
+        role_lower = role_input.lower()
+
+        if not role_lower:
+            return Response({
+                "success": False,
+                "message": "Role is required ('Agent' or 'User')."
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        if role_lower == 'admin':
+            return Response({
+                "success": False,
+                "message": "Admin promotion is restricted. Please manage administrator credentials securely via the Django Admin portal."
+            }, status=status.HTTP_403_FORBIDDEN)
+
+        if role_lower == 'agent':
+            serializer = AgentConversionSerializer(data=request.data)
+            if not serializer.is_valid():
+                return Response({
+                    "success": False,
+                    "message": "Validation failed for Agent conversion details.",
+                    "errors": serializer.errors
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            data = serializer.validated_data
+
+            # 1. Update user role
+            target_user.role = 'AGENT'
+            target_user.is_active = True
+            target_user.is_verified = True
+            target_user.save(update_fields=['role', 'is_active', 'is_verified'])
+
+            # 2. Generate unique formatted Agent ID (e.g. AGT00042)
+            agent_id = generate_agent_id(target_user.id)
+
+            # 3. Create or update ListenerProfile
+            lp, _ = ListenerProfile.objects.get_or_create(
+                user=target_user,
+                defaults={
+                    'listener_id': agent_id,
+                    'agent_id': agent_id,
+                    'name': data.get('name') or target_user.get_full_name() or target_user.username,
+                    'language': data.get('language') or 'English',
+                    'rate_per_second': data.get('rate_per_second', 3),
+                    'is_available': True,
+                    'is_verified': True,
+                    'verified_at': timezone.now()
+                }
+            )
+
+            # Ensure both agent_id and listener_id are set
+            lp.agent_id = agent_id
+            if not lp.listener_id:
+                lp.listener_id = agent_id
+
+            if data.get('name'):
+                lp.name = data['name']
+                target_user.first_name = data['name']
+                target_user.save(update_fields=['first_name'])
+
+            if data.get('bio') is not None:
+                lp.bio = data['bio']
+            if data.get('language'):
+                lp.language = data['language']
+            if data.get('rate_per_second'):
+                lp.rate_per_second = data['rate_per_second']
+            if data.get('interests') is not None:
+                lp.interests = data['interests']
+
+            # File uploads
+            if 'profile_picture' in request.FILES:
+                lp.profile_picture = request.FILES['profile_picture']
+                target_user.profile_picture = request.FILES['profile_picture']
+                target_user.save(update_fields=['profile_picture'])
+
+            if 'id_document' in request.FILES:
+                lp.id_document = request.FILES['id_document']
+
+            # Verification details
+            if data.get('id_type'):
+                lp.id_type = data['id_type']
+            if data.get('id_number'):
+                lp.id_number = data['id_number']
+            if data.get('verification_notes'):
+                lp.verification_notes = data['verification_notes']
+
+            # Sensitive Bank Details (strictly protected)
+            if data.get('account_holder_name'):
+                lp.account_holder_name = data['account_holder_name']
+            if data.get('account_number'):
+                lp.account_number = data['account_number']
+            if data.get('ifsc_code'):
+                lp.ifsc_code = data['ifsc_code']
+            if data.get('bank_name'):
+                lp.bank_name = data['bank_name']
+            if data.get('upi_id'):
+                lp.upi_id = data['upi_id']
+
+            lp.is_verified = True
+            lp.verified_at = timezone.now()
+            lp.is_available = True
+            lp.save()
+
+            # Ensure AgentWallet exists
+            AgentWallet.objects.get_or_create(agent=target_user, defaults={'balance': 0})
+
+            return Response({
+                "success": True,
+                "message": f"User '{target_user.username}' successfully converted to Agent with ID {lp.agent_id}.",
+                "data": {
+                    "user_id": target_user.id,
+                    "username": target_user.username,
+                    "agent_id": lp.agent_id,
+                    "is_agent": True,
+                    "role": "AGENT",
+                    "rate_per_second": lp.rate_per_second,
+                    "interests": lp.interests,
+                }
+            }, status=status.HTTP_200_OK)
+
+        elif role_lower == 'user':
+            target_user.role = 'CALLER'
+            target_user.save(update_fields=['role'])
+
+            lp = getattr(target_user, 'listener_profile', None)
+            if lp:
+                lp.is_available = False
+                lp.is_on_duty = False
+                lp.save(update_fields=['is_available', 'is_on_duty'])
+
+            return Response({
+                "success": True,
+                "message": f"Agent '{target_user.username}' successfully converted to normal User.",
+                "data": {
+                    "user_id": target_user.id,
+                    "username": target_user.username,
+                    "agent_id": None,
+                    "is_agent": False,
+                    "role": "CALLER",
+                }
+            }, status=status.HTTP_200_OK)
+
+        return Response({
+            "success": False,
+            "message": f"Invalid role '{role_input}'. Only 'Agent' or 'User' role transitions are supported."
+        }, status=status.HTTP_400_BAD_REQUEST)
+
+
+class AdminAgentDetailsView(APIView):
+    """
+    Admin-only endpoint to view full Agent verification and sensitive bank details:
+    GET /api/admin/users/<int:user_id>/agent-details/
+    """
+    permission_classes = [permissions.IsAuthenticated, IsAdminUser]
+
+    def get(self, request, user_id):
+        target_user = User.objects.filter(id=user_id).first()
+        if not target_user:
+            return Response({
+                "success": False,
+                "message": f"User with ID {user_id} not found."
+            }, status=status.HTTP_404_NOT_FOUND)
+
+        lp = getattr(target_user, 'listener_profile', None)
+        if not lp:
+            return Response({
+                "success": False,
+                "message": f"User with ID {user_id} does not have an Agent profile."
+            }, status=status.HTTP_404_NOT_FOUND)
+
+        serializer = AdminAgentDetailsSerializer(lp, context={'request': request})
+        return Response({
+            "success": True,
+            "data": serializer.data
+        }, status=status.HTTP_200_OK)
+
+
+class AgentInterestsListView(APIView):
+    """
+    Public / Agent endpoint returning the 7 canonical Agent conversation interests:
+    GET /api/agent/interests/
     """
     permission_classes = [permissions.AllowAny]
 
     def get(self, request):
         return Response({
-            "endpoint": "/api/admin/listeners/create/",
-            "method": "POST",
-            "description": "Admin endpoint to provision a new Listener username and password.",
-            "sample_body": {
-                "username": "LISTENER_001",
-                "password": "ListenerPass123!",
-                "language": "English"
-            }
+            "success": True,
+            "count": len(AGENT_INTEREST_OPTIONS),
+            "data": AGENT_INTEREST_OPTIONS
         }, status=status.HTTP_200_OK)
 
-    def post(self, request):
-        username = (request.data.get('username') or request.data.get('listener_id') or '').strip()
-        password = request.data.get('password') or ''
-        language = (request.data.get('language') or 'English').strip()
 
-        errors = {}
-        if not username:
-            errors['username'] = ["Listener username is required."]
-        elif User.objects.filter(username__iexact=username).exists():
-            errors['username'] = [f"Username '{username}' already exists. Please choose another."]
+# ==============================================================================
+# DEPRECATED STANDALONE AGENT CREATION (PRESERVED FOR FUTURE REFERENCE)
+# Replaced by Admin User -> Action -> Agent conversion flow (AdminUserRoleChangeView).
+# Do not delete. Preserved as commented code.
+# ==============================================================================
+# class AdminCreateListenerView(APIView):
+#     permission_classes = [permissions.AllowAny]
+#     def post(self, request):
+#         username = (request.data.get('username') or request.data.get('listener_id') or '').strip()
+#         password = request.data.get('password') or ''
+#         language = (request.data.get('language') or 'English').strip()
+#         user = User(username=username, role='LISTENER', is_active=True, is_verified=True)
+#         user.set_password(password)
+#         user.save()
+#         profile, _ = ListenerProfile.objects.get_or_create(user=user, defaults={'listener_id': username, 'language': language, 'is_available': True})
+#         return Response({"success": True, "message": f"Listener '{username}' created successfully."}, status=201)
 
-        if not password:
-            errors['password'] = ["Password is required."]
-        elif len(password) < 6:
-            errors['password'] = ["Password must be at least 6 characters."]
+class AdminCreateListenerView(APIView):
+    """
+    [PRESERVED / DISABLED] Standalone agent creation is superseded by the User -> Action -> Agent conversion flow.
+    Use POST /api/admin/users/<user_id>/role/ with role="Agent" instead.
+    """
+    permission_classes = [permissions.AllowAny]
 
-        if errors:
-            return Response({
-                "success": False,
-                "message": "Validation failed",
-                "errors": errors
-            }, status=status.HTTP_400_BAD_REQUEST)
-
-        # Create user with role='LISTENER'
-        user = User(
-            username=username,
-            role='LISTENER',
-            is_active=True,
-            is_verified=True
-        )
-        user.set_password(password)  # Secure PBKDF2 hashing
-        user.save()
-
-        # Create linked ListenerProfile
-        profile, _ = ListenerProfile.objects.get_or_create(
-            user=user,
-            defaults={
-                'listener_id': username,
-                'language': language,
-                'is_available': True
-            }
-        )
-        profile.listener_id = username
-        profile.language = language
-        profile.is_available = True
-        profile.save()
-
+    def get(self, request):
         return Response({
-            "success": True,
-            "message": f"Listener '{username}' created successfully.",
-            "data": {
-                "id": user.id,
-                "username": user.username,
-                "listener_id": profile.listener_id,
-                "role": user.role,
-                "language": profile.language,
-                "is_active": user.is_active,
-                "is_available": profile.is_available,
-                "created_at": user.created_at
-            }
-        }, status=status.HTTP_201_CREATED)
+            "success": False,
+            "message": "Standalone Agent creation is disabled. Please promote existing users to Agent via the Admin Panel User Management conversion flow (POST /api/admin/users/<user_id>/role/).",
+            "alternative_endpoint": "/api/admin/users/<user_id>/role/"
+        }, status=status.HTTP_410_GONE)
+
+    def post(self, request):
+        return Response({
+            "success": False,
+            "message": "Standalone Agent creation is disabled. Please promote existing users to Agent via the Admin Panel User Management conversion flow (POST /api/admin/users/<user_id>/role/).",
+            "alternative_endpoint": "/api/admin/users/<user_id>/role/"
+        }, status=status.HTTP_410_GONE)
 
 
 class AdminListenerListView(APIView):

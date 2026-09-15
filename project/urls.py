@@ -87,6 +87,9 @@ from core.views import (
     AgentPayoutView,
     AgentRatingView,
     AgentRecentSessionsView,
+    AdminUserRoleChangeView,
+    AdminAgentDetailsView,
+    AgentInterestsListView,
 )
 from core.caller_views import app_home_view, admin_panel_view, admin_live_data_api
 
@@ -102,6 +105,20 @@ urlpatterns = [
     path('', app_home_view, name='app-home'),
     path('app/', app_home_view, name='app-simulator'),
     path('simulator/', app_home_view, name='app-simulator-alias'),
+
+    # Admin User Role Management & Sensitive Agent Details
+    path('api/admin/users/<int:user_id>/role/', AdminUserRoleChangeView.as_view(), name='api-admin-user-role-change'),
+    path('api/admin/users/<int:user_id>/role', AdminUserRoleChangeView.as_view()),
+    path('admin/users/<int:user_id>/role/', AdminUserRoleChangeView.as_view()),
+    path('admin/users/<int:user_id>/role', AdminUserRoleChangeView.as_view()),
+    path('api/admin/users/<int:user_id>/agent-details/', AdminAgentDetailsView.as_view(), name='api-admin-agent-details'),
+    path('api/admin/users/<int:user_id>/agent-details', AdminAgentDetailsView.as_view()),
+    path('admin/users/<int:user_id>/agent-details/', AdminAgentDetailsView.as_view()),
+    path('admin/users/<int:user_id>/agent-details', AdminAgentDetailsView.as_view()),
+    path('api/agent/interests/', AgentInterestsListView.as_view(), name='api-agent-interests-list'),
+    path('api/agent/interests', AgentInterestsListView.as_view()),
+    path('agent/interests/', AgentInterestsListView.as_view()),
+    path('agent/interests', AgentInterestsListView.as_view()),
 
     # ==========================================
     # CALLER CRUD ENDPOINTS
@@ -182,10 +199,11 @@ urlpatterns = [
     path('api/listeners/<str:identifier>/delete', ListenerDeleteDirectView.as_view()),
     path('listeners/<str:identifier>/delete/', ListenerDeleteDirectView.as_view()),
     path('listeners/<str:identifier>/delete', ListenerDeleteDirectView.as_view()),
-    path('api/listeners/create/', AdminCreateListenerView.as_view()),
-    path('api/listeners/create', AdminCreateListenerView.as_view()),
-    path('listeners/create/', AdminCreateListenerView.as_view()),
-    path('listeners/create', AdminCreateListenerView.as_view()),
+    # [DEPRECATED / PRESERVED] Standalone create routes - superseded by User -> Agent conversion
+    # path('api/listeners/create/', AdminCreateListenerView.as_view()),
+    # path('api/listeners/create', AdminCreateListenerView.as_view()),
+    # path('listeners/create/', AdminCreateListenerView.as_view()),
+    # path('listeners/create', AdminCreateListenerView.as_view()),
     path('api/listeners/delete/', AdminDeleteListenerView.as_view()),
     path('api/listeners/delete', AdminDeleteListenerView.as_view()),
     path('listeners/delete/', AdminDeleteListenerView.as_view()),
@@ -200,10 +218,11 @@ urlpatterns = [
     path('api/admin/listeners', AdminListenerListView.as_view()),
     path('admin/listeners/', AdminListenerListView.as_view()),
     path('admin/listeners', AdminListenerListView.as_view()),
-    path('api/admin/listeners/create/', AdminCreateListenerView.as_view()),
-    path('api/admin/listeners/create', AdminCreateListenerView.as_view()),
-    path('admin/listeners/create/', AdminCreateListenerView.as_view()),
-    path('admin/listeners/create', AdminCreateListenerView.as_view()),
+    # [DEPRECATED / PRESERVED] Standalone admin create routes - superseded by User -> Agent conversion
+    # path('api/admin/listeners/create/', AdminCreateListenerView.as_view()),
+    # path('api/admin/listeners/create', AdminCreateListenerView.as_view()),
+    # path('admin/listeners/create/', AdminCreateListenerView.as_view()),
+    # path('admin/listeners/create', AdminCreateListenerView.as_view()),
     path('api/admin/listeners/delete/', AdminDeleteListenerView.as_view()),
     path('api/admin/listeners/delete', AdminDeleteListenerView.as_view()),
     path('admin/listeners/delete/', AdminDeleteListenerView.as_view()),

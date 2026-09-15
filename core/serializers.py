@@ -20,6 +20,7 @@ from .models import (
     AgentPayout,
     ConversationCategory,
     CALLER_NEED_OPTIONS,
+    AGENT_INTEREST_OPTIONS,
     normalize_caller_need,
 )
 from .constants import ALLOWED_REVIEW_TAGS
@@ -295,12 +296,16 @@ class CallerProfileSerializer(serializers.ModelSerializer):
     gender = serializers.CharField(required=False, allow_blank=True)
     language = serializers.CharField(required=False, allow_blank=True)
     current_need = serializers.CharField(required=False, allow_blank=True, max_length=100)
+    is_agent = serializers.SerializerMethodField()
+    agent_id = serializers.SerializerMethodField()
 
     class Meta:
         model = CallerProfile
         fields = (
             'id',
             'user_id',
+            'is_agent',
+            'agent_id',
             'phone_number',
             'profile_picture',
             'name',
@@ -321,6 +326,13 @@ class CallerProfileSerializer(serializers.ModelSerializer):
             'created_at',
             'updated_at',
         )
+
+    def get_is_agent(self, obj):
+        return bool(obj.user.is_agent and obj.user.is_active)
+
+    def get_agent_id(self, obj):
+        lp = getattr(obj.user, 'listener_profile', None)
+        return (lp.agent_id or lp.listener_id) if (obj.user.is_agent and lp) else None
 
     def validate_current_need(self, value):
         if not value:
@@ -444,6 +456,9 @@ class ListenerProfileSerializer(serializers.ModelSerializer):
 
 
 class UserDetailSerializer(serializers.ModelSerializer):
+    is_agent = serializers.SerializerMethodField()
+    agent_id = serializers.SerializerMethodField()
+
     class Meta:
         model = User
         fields = (
@@ -451,10 +466,19 @@ class UserDetailSerializer(serializers.ModelSerializer):
             'username',
             'phone_number',
             'role',
+            'is_agent',
+            'agent_id',
             'is_verified',
             'is_active',
             'created_at',
         )
+
+    def get_is_agent(self, obj):
+        return bool(obj.is_agent and obj.is_active)
+
+    def get_agent_id(self, obj):
+        lp = getattr(obj, 'listener_profile', None)
+        return (lp.agent_id or lp.listener_id) if (obj.is_agent and lp) else None
 
 
 
@@ -1231,7 +1255,7 @@ class ConversationCategorySerializer(serializers.ModelSerializer):
 
 
 class AgentProfileSerializer(serializers.ModelSerializer):
-    agent_id = serializers.ReadOnlyField(source='listener_id')
+    agent_id = serializers.SerializerMethodField()
     user_id = serializers.ReadOnlyField(source='user.id')
     username = serializers.ReadOnlyField(source='user.username')
     display_name = serializers.SerializerMethodField()
@@ -1407,6 +1431,133 @@ class AgentProfileSerializer(serializers.ModelSerializer):
         if cat_ids is not None:
             instance.conversation_categories.set(cat_ids)
         return instance
+
+    def get_agent_id(self, obj):
+        return obj.agent_id or obj.listener_id
+
+
+class AgentConversionSerializer(serializers.Serializer):
+    """
+    Serializer for Admin User -> Agent conversion form.
+    Validates agent display details, 7 canonical interests, sensitive bank details,
+    and identity verification documents.
+    """
+    name = serializers.CharField(max_length=100, required=False, allow_blank=True)
+    bio = serializers.CharField(required=False, allow_blank=True)
+    language = serializers.CharField(max_length=100, default='English', required=False, allow_blank=True)
+    rate_per_second = serializers.IntegerField(default=3, required=False)
+    interests = serializers.ListField(child=serializers.CharField(), required=False, default=list)
+    profile_picture = serializers.ImageField(required=False, allow_null=True)
+
+    # Sensitive Bank Details
+    account_holder_name = serializers.CharField(max_length=150, required=False, allow_blank=True)
+    account_number = serializers.CharField(max_length=50, required=False, allow_blank=True)
+    ifsc_code = serializers.CharField(max_length=20, required=False, allow_blank=True)
+    bank_name = serializers.CharField(max_length=100, required=False, allow_blank=True)
+    upi_id = serializers.CharField(max_length=100, required=False, allow_blank=True)
+
+    # Identity & Verification
+    id_document = serializers.FileField(required=False, allow_null=True)
+    id_type = serializers.CharField(max_length=50, required=False, allow_blank=True)
+    id_number = serializers.CharField(max_length=50, required=False, allow_blank=True)
+    verification_notes = serializers.CharField(required=False, allow_blank=True)
+
+    def validate_rate_per_second(self, value):
+        if value not in (3, 5, 10):
+            return 3
+        return value
+
+    def validate_interests(self, value):
+        if not value:
+            return []
+        if isinstance(value, str):
+            value = [i.strip() for i in value.split(',') if i.strip()]
+        canonical_map = {opt.lower(): opt for opt in AGENT_INTEREST_OPTIONS}
+        clean_interests = []
+        for item in value:
+            clean = str(item).strip()
+            if not clean:
+                continue
+            if clean.lower() not in canonical_map:
+                valid_options = ", ".join(AGENT_INTEREST_OPTIONS)
+                raise serializers.ValidationError(
+                    f"'{clean}' is not a valid Agent interest. Valid options are: {valid_options}."
+                )
+            canonical_val = canonical_map[clean.lower()]
+            if canonical_val not in clean_interests:
+                clean_interests.append(canonical_val)
+        return clean_interests
+
+
+class AdminAgentDetailsSerializer(serializers.ModelSerializer):
+    """
+    Admin-only serializer exposing Agent sensitive bank details, verification documents, and Agent ID.
+    Must NEVER be used in caller or public views.
+    """
+    user_id = serializers.ReadOnlyField(source='user.id')
+    username = serializers.ReadOnlyField(source='user.username')
+    phone_number = serializers.ReadOnlyField(source='user.phone_number')
+    agent_id = serializers.SerializerMethodField()
+    id_document_url = serializers.SerializerMethodField()
+    profile_picture_url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ListenerProfile
+        fields = (
+            'id',
+            'agent_id',
+            'user_id',
+            'username',
+            'phone_number',
+            'name',
+            'language',
+            'bio',
+            'interests',
+            'rate_per_second',
+            'rating',
+            'total_calls',
+            'total_earned_coins',
+            'is_on_duty',
+            'is_busy',
+            'is_available',
+            'is_verified',
+            'account_holder_name',
+            'account_number',
+            'ifsc_code',
+            'bank_name',
+            'upi_id',
+            'id_type',
+            'id_number',
+            'id_document_url',
+            'verification_notes',
+            'verified_at',
+            'profile_picture_url',
+            'created_at',
+            'updated_at',
+        )
+
+    def get_agent_id(self, obj):
+        return obj.agent_id or obj.listener_id
+
+    def get_profile_picture_url(self, obj):
+        if obj.profile_picture:
+            try:
+                request = self.context.get('request')
+                url = obj.profile_picture.url
+                return request.build_absolute_uri(url) if request and not url.startswith(('http://', 'https://')) else url
+            except Exception:
+                return None
+        return None
+
+    def get_id_document_url(self, obj):
+        if obj.id_document:
+            try:
+                request = self.context.get('request')
+                url = obj.id_document.url
+                return request.build_absolute_uri(url) if request and not url.startswith(('http://', 'https://')) else url
+            except Exception:
+                return None
+        return None
 
 
 class AgentRateSerializer(serializers.Serializer):
