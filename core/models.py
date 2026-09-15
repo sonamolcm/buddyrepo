@@ -194,16 +194,15 @@ class CallerProfile(models.Model):
 
 
 AGENT_INTEREST_OPTIONS = [
-    "Just talk",
-    "Friendly conversation",
+    "Conversation",
+    "Friendship",
+    "Companionship",
     "Advice",
-    "Career",
-    "Travel",
-    "Elder companion",
-    "Student companion",
-    "Language",
-    "Casual",
+    "Motivation",
+    "Listening",
+    "Human connection",
 ]
+
 
 
 def generate_agent_id(user_id: int) -> str:

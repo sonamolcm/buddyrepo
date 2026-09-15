@@ -2575,6 +2575,90 @@ class CallerAgentDiscoveryTwoLevelTestCase(TestCase):
         self.assertIn(self.agent1.id, ids2)
 
 
+class AdminUserRoleChangePermissionTestCase(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+
+        # 1. User with role="ADMIN" but is_staff=False
+        self.admin_user_role = User.objects.create_user(
+            username="admin_role_only",
+            phone_number="+919876500111",
+            role="ADMIN",
+            is_active=True,
+            is_staff=False
+        )
+
+        # 2. User with is_staff=True but role="CALLER"
+        self.admin_staff_user = User.objects.create_user(
+            username="admin_staff_only",
+            phone_number="+919876500112",
+            role="CALLER",
+            is_active=True,
+            is_staff=True
+        )
+
+        # 3. Normal Caller user
+        self.normal_user = User.objects.create_user(
+            username="normal_caller_user",
+            phone_number="+919876500113",
+            role="CALLER",
+            is_active=True,
+            is_staff=False
+        )
+
+        # 4. Target user for promotion to Agent
+        self.target_user = User.objects.create_user(
+            username="target_user_to_promote",
+            phone_number="+919876500114",
+            role="CALLER",
+            is_active=True
+        )
+
+    def test_unauthenticated_request_returns_401(self):
+        res = self.client.post(f'/api/admin/users/{self.target_user.id}/role/', {'role': 'Agent'}, format='json')
+        self.assertEqual(res.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_normal_authenticated_user_returns_403(self):
+        self.client.force_authenticate(user=self.normal_user)
+        res = self.client.post(f'/api/admin/users/{self.target_user.id}/role/', {'role': 'Agent'}, format='json')
+        self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_admin_role_user_is_allowed_and_can_promote_to_agent(self):
+        self.client.force_authenticate(user=self.admin_user_role)
+        res = self.client.post(f'/api/admin/users/{self.target_user.id}/role/', {
+            'role': 'Agent',
+            'name': 'Promoted Agent 1',
+            'language': 'English',
+            'interests': ['Conversation', 'Friendship']
+        }, format='json')
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertTrue(res.data['success'])
+        self.target_user.refresh_from_db()
+        self.assertEqual(self.target_user.role, 'AGENT')
+        self.assertTrue(hasattr(self.target_user, 'listener_profile'))
+
+    def test_is_staff_user_is_allowed_and_can_promote_to_agent(self):
+        self.client.force_authenticate(user=self.admin_staff_user)
+        res = self.client.post(f'/api/admin/users/{self.target_user.id}/role/', {
+            'role': 'Agent',
+            'name': 'Promoted Agent 2',
+            'language': 'English',
+            'interests': ['Advice', 'Motivation']
+        }, format='json')
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertTrue(res.data['success'])
+        self.target_user.refresh_from_db()
+        self.assertEqual(self.target_user.role, 'AGENT')
+
+    def test_user_to_admin_promotion_is_rejected(self):
+        self.client.force_authenticate(user=self.admin_user_role)
+        res = self.client.post(f'/api/admin/users/{self.target_user.id}/role/', {'role': 'Admin'}, format='json')
+        self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertFalse(res.data['success'])
+        self.assertIn('restricted', res.data['message'].lower())
+
+
+
 
 
 
