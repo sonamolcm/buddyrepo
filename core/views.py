@@ -4778,7 +4778,7 @@ class AdminUserRoleChangeView(APIView):
                     'agent_id': agent_id,
                     'name': data.get('name') or target_user.get_full_name() or target_user.username,
                     'language': data.get('language') or 'English',
-                    'rate_per_second': data.get('rate_per_second', 3),
+                    'rate_per_second': data.get('rate_per_second', 5) or 5,
                     'is_available': True,
                     'is_verified': True,
                     'verified_at': timezone.now()
@@ -4799,8 +4799,7 @@ class AdminUserRoleChangeView(APIView):
                 lp.bio = data['bio']
             if data.get('language'):
                 lp.language = data['language']
-            if data.get('rate_per_second'):
-                lp.rate_per_second = data['rate_per_second']
+            lp.rate_per_second = data.get('rate_per_second') or 5
             if data.get('interests') is not None:
                 lp.interests = data['interests']
 

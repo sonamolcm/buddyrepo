@@ -99,7 +99,7 @@ def admin_panel_view(request: HttpRequest) -> HttpResponse:
         'all_users': all_users,
         'categories': categories,
         'world_languages': WORLD_LANGUAGES,
-        'agent_interest_options': [opt[0] for opt in AGENT_INTEREST_OPTIONS],
+        'agent_interest_options': list(AGENT_INTEREST_OPTIONS),
         'payouts': payouts,
         'wallet_transactions': wallet_transactions,
         'agent_earnings': agent_earnings,
@@ -185,6 +185,8 @@ def admin_live_data_api(request: HttpRequest) -> HttpResponse:
             elif w and w.balance:
                 bal = w.balance
 
+            is_on_duty = bool(lp and (lp.is_on_duty or lp.is_available)) if (lp and u.is_listener) else False
+
             users_list.append({
                 'id': u.id,
                 'username': u.username,
@@ -194,6 +196,7 @@ def admin_live_data_api(request: HttpRequest) -> HttpResponse:
                 'is_listener': u.is_listener,
                 'is_agent': u.is_agent,
                 'agent_id': (getattr(lp, 'agent_id', None) or getattr(lp, 'listener_id', '')) if (lp and u.is_listener) else None,
+                'is_on_duty': is_on_duty,
                 'coins': bal,
                 'is_earned': is_earned,
                 'is_verified': bool(u.is_verified),

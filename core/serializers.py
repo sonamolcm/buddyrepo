@@ -1445,7 +1445,7 @@ class AgentConversionSerializer(serializers.Serializer):
     name = serializers.CharField(max_length=100, required=False, allow_blank=True)
     bio = serializers.CharField(required=False, allow_blank=True)
     language = serializers.CharField(max_length=100, default='English', required=False, allow_blank=True)
-    rate_per_second = serializers.IntegerField(default=3, required=False)
+    rate_per_second = serializers.IntegerField(default=5, required=False)
     interests = serializers.ListField(child=serializers.CharField(), required=False, default=list)
     profile_picture = serializers.ImageField(required=False, allow_null=True)
 
@@ -1463,9 +1463,7 @@ class AgentConversionSerializer(serializers.Serializer):
     verification_notes = serializers.CharField(required=False, allow_blank=True)
 
     def validate_rate_per_second(self, value):
-        if value not in (3, 5, 10):
-            return 3
-        return value
+        return 5
 
     def validate_interests(self, value):
         if not value:

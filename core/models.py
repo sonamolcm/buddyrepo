@@ -194,13 +194,15 @@ class CallerProfile(models.Model):
 
 
 AGENT_INTEREST_OPTIONS = [
-    "Conversation",
-    "Friendship",
-    "Companionship",
+    "Just talk",
+    "Friendly conversation",
     "Advice",
-    "Motivation",
-    "Listening",
-    "Human connection",
+    "Career",
+    "Travel",
+    "Elder companion",
+    "Student companion",
+    "Language",
+    "Casual",
 ]
 
 
