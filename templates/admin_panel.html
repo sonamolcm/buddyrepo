@@ -1034,9 +1034,17 @@
                   {% endif %}
                 </td>
                 <td>
-                  <span class="badge {% if u.is_active %}badge-success{% else %}badge-danger{% endif %}" id="user-status-badge-{{ u.id }}">
-                    {% if u.is_active %}Active{% else %}Blocked{% endif %}
-                  </span>
+                  {% if not u.is_active %}
+                  <span class="badge badge-danger" id="user-status-badge-{{ u.id }}">Blocked</span>
+                  {% elif u.is_listener or u.is_agent %}
+                    {% if u.listener_profile and u.listener_profile.is_on_duty %}
+                    <span class="badge badge-success" id="user-status-badge-{{ u.id }}">Online</span>
+                    {% else %}
+                    <span class="badge badge-gray" id="user-status-badge-{{ u.id }}">Offline</span>
+                    {% endif %}
+                  {% else %}
+                  <span class="badge badge-success" id="user-status-badge-{{ u.id }}">Active</span>
+                  {% endif %}
                 </td>
                 <td style="color: var(--text-muted);">{{ u.created_at|date:"M d, Y" }}</td>
                 <td>
@@ -2420,9 +2428,18 @@
                 '<span class="badge badge-success">Verified</span>' :
                 '<span class="badge badge-warning">Unverified</span>';
 
-              const activeBadge = u.is_active ?
-                `<span class="badge badge-success" id="user-status-badge-${u.id}">Active</span>` :
-                `<span class="badge badge-danger" id="user-status-badge-${u.id}">Blocked</span>`;
+              let activeBadge = '';
+              if (!u.is_active) {
+                activeBadge = `<span class="badge badge-danger" id="user-status-badge-${u.id}">Blocked</span>`;
+              } else if (isAgent) {
+                if (u.is_on_duty) {
+                  activeBadge = `<span class="badge badge-success" id="user-status-badge-${u.id}">Online</span>`;
+                } else {
+                  activeBadge = `<span class="badge badge-gray" id="user-status-badge-${u.id}">Offline</span>`;
+                }
+              } else {
+                activeBadge = `<span class="badge badge-success" id="user-status-badge-${u.id}">Active</span>`;
+              }
 
               const phoneHtml = u.phone ? `<div style="font-size: 12px; color: var(--text-muted);">${u.phone}</div>` : '';
               const searchAttr = `${(u.username||'').toLowerCase()} ${(u.phone||'').toLowerCase()} ${(u.name||'').toLowerCase()}`;
