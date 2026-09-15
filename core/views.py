@@ -357,6 +357,19 @@ class CallerSignupCompleteProfileView(APIView):
             caller_profile.interests = interests
             caller_profile.save()
 
+            # Initialize wallet with 300 coins for newly registered Caller
+            wallet, wallet_created = Wallet.objects.get_or_create(
+                user=user,
+                defaults={'balance': 300}
+            )
+            if wallet_created:
+                WalletTransaction.objects.create(
+                    wallet=wallet,
+                    transaction_type='CREDIT',
+                    amount=300,
+                    description='Welcome bonus coins for new caller'
+                )
+
         # Issue JWT tokens
         refresh = RefreshToken.for_user(user)
 
@@ -3930,9 +3943,22 @@ class CategoryDetailView(APIView):
                 status=status.HTTP_404_NOT_FOUND
             )
 
-        users = ensure_sample_category_listeners(category)
-
-        matches = [serialize_listener_user(u, request) for u in users]
+        conv_cats = (
+            request.query_params.getlist('conversation_categories') or
+            request.query_params.getlist('conversation_category') or
+            request.query_params.get('conversation_categories') or
+            request.query_params.get('conversation_category')
+        )
+        if conv_cats:
+            matches = filter_agents_two_level(
+                conv_cat_inputs=conv_cats,
+                profession_input=category.id,
+                available_only=True,
+                request=request
+            )
+        else:
+            users = ensure_sample_category_listeners(category)
+            matches = [serialize_listener_user(u, request) for u in users]
 
         serializer = CategorySerializer(category, context={'request': request})
         category_data = dict(serializer.data)
@@ -4055,18 +4081,193 @@ class ConversationCategoryListView(APIView):
         }, status=status.HTTP_200_OK)
 
 
+def filter_agents_two_level(conv_cat_inputs=None, profession_input=None, available_only=True, request=None):
+    """
+    Performs two-level filtering for Caller Agent Discovery:
+    - Level 1: Conversation Categories (one or multiple needs).
+    - Level 2: Profession Category (single profession).
+    - Availability: Filters for active agents, on-duty (is_on_duty=True), and available (is_agent_available=True).
+    """
+    agents_qs = User.objects.filter(
+        role__in=['LISTENER', 'AGENT', 'BUDDY'],
+        is_active=True
+    ).select_related('listener_profile', 'listener_profile__profession', 'buddy_profile', 'buddy_profile__profession').prefetch_related('listener_profile__conversation_categories').distinct()
+
+    # Level 1: Conversation Categories filter (OR matching among selected categories)
+    if conv_cat_inputs:
+        raw_cats = []
+        if isinstance(conv_cat_inputs, str):
+            raw_cats = [c.strip() for c in conv_cat_inputs.split(',') if c.strip()]
+        elif isinstance(conv_cat_inputs, (list, tuple)):
+            for item in conv_cat_inputs:
+                if isinstance(item, str) and ',' in item:
+                    raw_cats.extend([c.strip() for c in item.split(',') if c.strip()])
+                elif item:
+                    raw_cats.append(str(item).strip())
+
+        conv_cat_ids = []
+        for cat_item in raw_cats:
+            if not cat_item:
+                continue
+            cat_obj = None
+            if str(cat_item).isdigit():
+                cat_obj = ConversationCategory.objects.filter(id=int(cat_item), is_active=True).first()
+            if not cat_obj:
+                cat_obj = ConversationCategory.objects.filter(name__iexact=str(cat_item), is_active=True).first()
+            if cat_obj:
+                conv_cat_ids.append(cat_obj.id)
+
+        if conv_cat_ids:
+            agents_qs = agents_qs.filter(listener_profile__conversation_categories__id__in=conv_cat_ids).distinct()
+        elif raw_cats:
+            return []
+
+    # Level 2: Profession Category filter (AND matching with selected profession)
+    if profession_input:
+        prof_str = str(profession_input).strip()
+        if prof_str:
+            prof_obj = None
+            if prof_str.isdigit():
+                prof_obj = Category.objects.filter(id=int(prof_str), is_active=True).first()
+            if not prof_obj:
+                prof_obj = Category.objects.filter(name__iexact=prof_str, is_active=True).first()
+
+            if prof_obj:
+                agents_qs = agents_qs.filter(
+                    Q(listener_profile__profession=prof_obj) | Q(buddy_profile__profession=prof_obj)
+                ).distinct()
+            else:
+                return []
+
+    # Availability & Serialization Filter
+    matching_agents = []
+    for user in agents_qs:
+        lp = getattr(user, 'listener_profile', None)
+        bp = getattr(user, 'buddy_profile', None)
+
+        if not (lp or bp):
+            continue
+
+        if available_only:
+            if not user.is_active:
+                continue
+            if lp and not lp.is_on_duty:
+                continue
+            if not is_agent_available(user):
+                continue
+
+        agent_data = serialize_listener_user(user, request)
+
+        if lp:
+            cats_data = [
+                {
+                    "id": c.id,
+                    "name": c.name,
+                    "emoji": c.emoji,
+                    "tagline": c.tagline
+                }
+                for c in lp.conversation_categories.filter(is_active=True).order_by('order', 'id')
+            ]
+            agent_data["conversation_categories"] = cats_data
+
+        matching_agents.append(agent_data)
+
+    return matching_agents
+
+
+class AgentDiscoveryView(APIView):
+    """
+    Caller Agent Discovery API (Two-Level Filtering):
+    - Level 1: conversation_categories (one or multiple selected conversation categories/needs)
+    - Level 2: profession (one selected profession/category, e.g. Doctor, Teacher, etc.)
+    Returns matching active, on-duty, available Agents.
+    """
+    permission_classes = [permissions.AllowAny]
+
+    def _get_caller(self, request):
+        if getattr(request, 'user', None) and request.user.is_authenticated:
+            return request.user
+        return _resolve_user_for_wallet(request)
+
+    def process_discovery(self, request):
+        caller = self._get_caller(request)
+        if not caller:
+            return Response({
+                "success": False,
+                "message": "Caller authentication required."
+            }, status=status.HTTP_401_UNAUTHORIZED)
+
+        data = request.data if isinstance(request.data, dict) else {}
+        query = request.query_params
+
+        conv_cats = (
+            query.getlist('conversation_categories[]') or
+            query.getlist('conversation_categories') or
+            query.getlist('conversation_category') or
+            query.get('conversation_categories') or
+            query.get('conversation_category') or
+            data.get('conversation_categories') or
+            data.get('conversation_category') or
+            data.get('interests') or
+            data.get('needs') or
+            []
+        )
+
+        profession = (
+            query.get('profession') or
+            query.get('profession_id') or
+            query.get('category') or
+            query.get('category_id') or
+            data.get('profession') or
+            data.get('profession_id') or
+            data.get('category') or
+            data.get('category_id') or
+            ''
+        )
+
+        available_only_str = str(query.get('available_only', data.get('available_only', 'true'))).lower()
+        available_only = available_only_str in ('true', '1', 'yes')
+
+        agents = filter_agents_two_level(
+            conv_cat_inputs=conv_cats,
+            profession_input=profession,
+            available_only=available_only,
+            request=request
+        )
+
+        if not agents:
+            return Response({
+                "success": True,
+                "message": "No matching agents found for the selected criteria.",
+                "count": 0,
+                "data": []
+            }, status=status.HTTP_200_OK)
+
+        return Response({
+            "success": True,
+            "message": f"Retrieved {len(agents)} matching agent(s).",
+            "count": len(agents),
+            "data": agents
+        }, status=status.HTTP_200_OK)
+
+    def get(self, request):
+        return self.process_discovery(request)
+
+    def post(self, request):
+        return self.process_discovery(request)
+
+
 class ConversationCategoryAgentsView(APIView):
     """
     GET /api/conversation-categories/<category_id>/agents/
-    Optional param: ?available_only=true
-    Returns agents matching the conversation category.
+    Optional param: ?profession=Doctor&available_only=true
+    Returns agents matching the conversation category (and profession if specified).
     """
     permission_classes = [permissions.AllowAny]
 
     def get(self, request, category_id):
-        # Resolve category by id or name
-        category = None
         cat_str = str(category_id).strip()
+        category = None
         if cat_str.isdigit():
             category = ConversationCategory.objects.filter(id=int(cat_str), is_active=True).first()
         if not category:
@@ -4078,57 +4279,23 @@ class ConversationCategoryAgentsView(APIView):
                 "message": f"Conversation category with ID '{category_id}' does not exist or is inactive."
             }, status=status.HTTP_404_NOT_FOUND)
 
-        available_only = request.query_params.get('available_only', '').lower() in ('true', '1', 'yes')
+        available_only = request.query_params.get('available_only', 'true').lower() in ('true', '1', 'yes')
+        profession = request.query_params.get('profession') or request.query_params.get('profession_id') or request.query_params.get('category') or request.query_params.get('category_id')
 
-        agent_users = User.objects.filter(
-            role__in=['LISTENER', 'AGENT', 'BUDDY'],
-            is_active=True,
-            listener_profile__conversation_categories=category
-        ).select_related('listener_profile').prefetch_related('listener_profile__conversation_categories').distinct()
+        extra_conv = request.query_params.getlist('conversation_categories') or request.query_params.get('conversation_categories')
+        all_conv = [category.id]
+        if extra_conv:
+            if isinstance(extra_conv, list):
+                all_conv.extend(extra_conv)
+            else:
+                all_conv.extend([c.strip() for c in extra_conv.split(',') if c.strip()])
 
-        result_agents = []
-        for user in agent_users:
-            lp = getattr(user, 'listener_profile', None)
-            if not lp:
-                continue
-
-            if available_only:
-                # Agent must be on duty and available via existing availability helper
-                if not lp.is_on_duty:
-                    continue
-                if not is_agent_available(user):
-                    continue
-
-            photo_url = None
-            if lp.profile_picture:
-                try:
-                    raw_url = lp.profile_picture.url
-                    photo_url = request.build_absolute_uri(raw_url) if not raw_url.startswith(('http://', 'https://')) else raw_url
-                except Exception:
-                    photo_url = None
-
-            cats_data = [
-                {
-                    "id": c.id,
-                    "name": c.name,
-                    "emoji": c.emoji,
-                    "tagline": c.tagline
-                }
-                for c in lp.conversation_categories.filter(is_active=True).order_by('order', 'id')
-            ]
-
-            result_agents.append({
-                "id": user.id,
-                "username": user.username,
-                "name": lp.name or user.first_name or user.username,
-                "profile_picture": photo_url,
-                "rate_per_second": lp.rate_per_second,
-                "rating": float(lp.rating),
-                "is_on_duty": lp.is_on_duty,
-                "is_available": lp.is_available,
-                "is_busy": lp.is_busy,
-                "conversation_categories": cats_data
-            })
+        result_agents = filter_agents_two_level(
+            conv_cat_inputs=all_conv,
+            profession_input=profession,
+            available_only=available_only,
+            request=request
+        )
 
         if not result_agents:
             return Response({
@@ -4156,6 +4323,7 @@ class ConversationCategoryAgentsView(APIView):
             },
             "data": result_agents
         }, status=status.HTTP_200_OK)
+
 
 
 # ===================================================
@@ -4558,6 +4726,19 @@ class WebVerifyOTPView(APIView):
             user=user,
             defaults={'language': 'English'}
         )
+
+        if created and user.is_caller:
+            wallet, wallet_created = Wallet.objects.get_or_create(
+                user=user,
+                defaults={'balance': 300}
+            )
+            if wallet_created:
+                WalletTransaction.objects.create(
+                    wallet=wallet,
+                    transaction_type='CREDIT',
+                    amount=300,
+                    description='Welcome bonus coins for new caller'
+                )
 
         refresh = RefreshToken.for_user(user)
 
@@ -5154,6 +5335,18 @@ class CallerListCreateView(APIView):
             }
         )
 
+        wallet, wallet_created = Wallet.objects.get_or_create(
+            user=user,
+            defaults={'balance': 300}
+        )
+        if wallet_created:
+            WalletTransaction.objects.create(
+                wallet=wallet,
+                transaction_type='CREDIT',
+                amount=300,
+                description='Welcome bonus coins for new caller'
+            )
+
         return Response({
             "success": True,
             "message": f"Caller {phone_number} created successfully.",
@@ -5737,8 +5930,12 @@ class ListenerListCreateView(APIView):
     permission_classes = [permissions.AllowAny]
 
     def get(self, request):
-        listeners = User.objects.filter(role__in=['LISTENER', 'AGENT', 'BUDDY']).select_related('listener_profile', 'buddy_profile').order_by('-created_at')
-
+        conv_cats = (
+            request.query_params.getlist('conversation_categories') or
+            request.query_params.getlist('conversation_category') or
+            request.query_params.get('conversation_categories') or
+            request.query_params.get('conversation_category')
+        )
         cat_param = (
             request.query_params.get('category') or
             request.query_params.get('category_id') or
@@ -5746,6 +5943,21 @@ class ListenerListCreateView(APIView):
             request.query_params.get('profession_id') or
             ''
         ).strip()
+
+        if conv_cats:
+            data = filter_agents_two_level(
+                conv_cat_inputs=conv_cats,
+                profession_input=cat_param if cat_param else None,
+                available_only=request.query_params.get('available_only', 'true').lower() in ('true', '1', 'yes'),
+                request=request
+            )
+            return Response({
+                "success": True,
+                "count": len(data),
+                "data": data
+            }, status=status.HTTP_200_OK)
+
+        listeners = User.objects.filter(role__in=['LISTENER', 'AGENT', 'BUDDY']).select_related('listener_profile', 'buddy_profile').order_by('-created_at')
 
         if cat_param:
             if cat_param.isdigit():
@@ -5775,6 +5987,7 @@ class ListenerListCreateView(APIView):
             "count": len(data),
             "data": data
         }, status=status.HTTP_200_OK)
+
 
     def post(self, request):
         username = (request.data.get('username') or request.data.get('listener_id') or '').strip()

@@ -53,6 +53,7 @@ from .views import (  # type: ignore
     CallerNeedsView,
     ConversationCategoryListView,
     ConversationCategoryAgentsView,
+    AgentDiscoveryView,
     # Legal & Helpline
     TermsAndConditionsView,
     CallerPrivacySettingsView,
@@ -383,6 +384,10 @@ urlpatterns = [
     path('conversation-categories/<int:category_id>/agents', ConversationCategoryAgentsView.as_view()),
     path('conversation-categories/<str:category_id>/agents/', ConversationCategoryAgentsView.as_view(), name='conversation-category-agents-str'),
     path('conversation-categories/<str:category_id>/agents', ConversationCategoryAgentsView.as_view()),
+    path('agents/discover/', AgentDiscoveryView.as_view(), name='agents-discover'),
+    path('agents/discover', AgentDiscoveryView.as_view()),
+    path('caller/agents/discover/', AgentDiscoveryView.as_view(), name='caller-agents-discover'),
+    path('caller/agents/discover', AgentDiscoveryView.as_view()),
 
     # ==========================================
     # 6.1 APP LEGAL & SUPPORT (TERMS, PRIVACY, HELPLINE)

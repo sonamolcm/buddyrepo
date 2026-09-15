@@ -2307,6 +2307,7 @@ class ConversationCategoriesAndCallerNeedsTestCase(TestCase):
         call_obj.save(update_fields=['status'])
 
         # Explicitly passing caller_need in call request overrides profile
+        # Explicitly passing caller_need in call request overrides profile
         res2 = self.client.post('/api/calls/request/', {
             'agent_user_id': self.agent1.id,
             'caller_need': 'want_motivation'
@@ -2314,6 +2315,265 @@ class ConversationCategoriesAndCallerNeedsTestCase(TestCase):
         self.assertEqual(res2.status_code, status.HTTP_201_CREATED)
         call2_obj = Call.objects.get(id=res2.data['call_id'])
         self.assertEqual(call2_obj.caller_need, "want_motivation")
+
+
+class CallerAgentDiscoveryTwoLevelTestCase(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+
+        # Conversation Categories
+        self.cat_just_talk, _ = ConversationCategory.objects.get_or_create(
+            name="Just Talk",
+            defaults={'tagline': "I need someone to talk to.", 'emoji': "❤️", 'is_active': True}
+        )
+        self.cat_advice, _ = ConversationCategory.objects.get_or_create(
+            name="Advice",
+            defaults={'tagline': "I need another person's perspective.", 'emoji': "🧠", 'is_active': True}
+        )
+        self.cat_career, _ = ConversationCategory.objects.get_or_create(
+            name="Career",
+            defaults={'tagline': "Talk to someone experienced in my field.", 'emoji': "💼", 'is_active': True}
+        )
+
+        # Profession Categories
+        self.prof_doctor, _ = Category.objects.get_or_create(
+            name="Doctor",
+            defaults={'description': "Physician and Specialist", 'is_active': True}
+        )
+        self.prof_teacher, _ = Category.objects.get_or_create(
+            name="Teacher",
+            defaults={'description': "Education and Tutoring", 'is_active': True}
+        )
+
+        # Authenticated Caller
+        self.caller = User.objects.create_user(
+            username="test_caller_2level",
+            phone_number="+919876599001",
+            role="CALLER",
+            is_active=True
+        )
+        self.caller_profile, _ = CallerProfile.objects.get_or_create(user=self.caller, defaults={'name': "Caller TwoLevel"})
+        Wallet.objects.get_or_create(user=self.caller, defaults={'balance': 500})
+
+        # Agent 1: Doctor + Just Talk (On-Duty, Active, Available)
+        self.agent1 = User.objects.create_user(username="agent_doc_justtalk", phone_number="+919876599002", role="AGENT", is_active=True)
+        self.lp1, _ = ListenerProfile.objects.get_or_create(user=self.agent1)
+        self.lp1.listener_id = "doc_justtalk"
+        self.lp1.name = "Dr. JustTalk"
+        self.lp1.profession = self.prof_doctor
+        self.lp1.is_on_duty = True
+        self.lp1.is_available = True
+        self.lp1.save()
+        self.lp1.conversation_categories.add(self.cat_just_talk)
+
+        # Agent 2: Doctor + Advice (On-Duty, Active, Available)
+        self.agent2 = User.objects.create_user(username="agent_doc_advice", phone_number="+919876599003", role="AGENT", is_active=True)
+        self.lp2, _ = ListenerProfile.objects.get_or_create(user=self.agent2)
+        self.lp2.listener_id = "doc_advice"
+        self.lp2.name = "Dr. Advice"
+        self.lp2.profession = self.prof_doctor
+        self.lp2.is_on_duty = True
+        self.lp2.is_available = True
+        self.lp2.save()
+        self.lp2.conversation_categories.add(self.cat_advice)
+
+        # Agent 3: Doctor + Just Talk + Advice (On-Duty, Active, Available)
+        self.agent3 = User.objects.create_user(username="agent_doc_both", phone_number="+919876599004", role="AGENT", is_active=True)
+        self.lp3, _ = ListenerProfile.objects.get_or_create(user=self.agent3)
+        self.lp3.listener_id = "doc_both"
+        self.lp3.name = "Dr. Both"
+        self.lp3.profession = self.prof_doctor
+        self.lp3.is_on_duty = True
+        self.lp3.is_available = True
+        self.lp3.save()
+        self.lp3.conversation_categories.add(self.cat_just_talk, self.cat_advice)
+
+        # Agent 4: Teacher + Just Talk (Non-Doctor, On-Duty, Active, Available)
+        self.agent4 = User.objects.create_user(username="agent_teacher_justtalk", phone_number="+919876599005", role="AGENT", is_active=True)
+        self.lp4, _ = ListenerProfile.objects.get_or_create(user=self.agent4)
+        self.lp4.listener_id = "teacher_justtalk"
+        self.lp4.name = "Teacher JustTalk"
+        self.lp4.profession = self.prof_teacher
+        self.lp4.is_on_duty = True
+        self.lp4.is_available = True
+        self.lp4.save()
+        self.lp4.conversation_categories.add(self.cat_just_talk)
+
+        # Agent 5: Doctor + Career (Doctor without Just Talk or Advice, On-Duty, Active, Available)
+        self.agent5 = User.objects.create_user(username="agent_doc_career", phone_number="+919876599006", role="AGENT", is_active=True)
+        self.lp5, _ = ListenerProfile.objects.get_or_create(user=self.agent5)
+        self.lp5.listener_id = "doc_career"
+        self.lp5.name = "Dr. Career"
+        self.lp5.profession = self.prof_doctor
+        self.lp5.is_on_duty = True
+        self.lp5.is_available = True
+        self.lp5.save()
+        self.lp5.conversation_categories.add(self.cat_career)
+
+        # Agent 6: Doctor + Just Talk (Off-Duty)
+        self.agent6 = User.objects.create_user(username="agent_doc_offduty", phone_number="+919876599007", role="AGENT", is_active=True)
+        self.lp6, _ = ListenerProfile.objects.get_or_create(user=self.agent6)
+        self.lp6.listener_id = "doc_offduty"
+        self.lp6.name = "Dr. OffDuty"
+        self.lp6.profession = self.prof_doctor
+        self.lp6.is_on_duty = False
+        self.lp6.is_available = False
+        self.lp6.save()
+        self.lp6.conversation_categories.add(self.cat_just_talk)
+
+        # Agent 7: Doctor + Just Talk (Inactive User)
+        self.agent7 = User.objects.create_user(username="agent_doc_inactive", phone_number="+919876599008", role="AGENT", is_active=False)
+        self.lp7, _ = ListenerProfile.objects.get_or_create(user=self.agent7)
+        self.lp7.listener_id = "doc_inactive"
+        self.lp7.name = "Dr. Inactive"
+        self.lp7.profession = self.prof_doctor
+        self.lp7.is_on_duty = True
+        self.lp7.is_available = True
+        self.lp7.save()
+        self.lp7.conversation_categories.add(self.cat_just_talk)
+
+    def test_1_caller_selects_just_talk_and_doctor(self):
+        self.client.force_authenticate(user=self.caller)
+        res = self.client.get('/api/agents/discover/', {
+            'conversation_categories': 'Just Talk',
+            'profession': 'Doctor'
+        })
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertTrue(res.data['success'])
+        agent_ids = [a['id'] for a in res.data['data']]
+        self.assertIn(self.agent1.id, agent_ids)
+        self.assertIn(self.agent3.id, agent_ids)
+        self.assertNotIn(self.agent2.id, agent_ids)
+        self.assertNotIn(self.agent4.id, agent_ids)
+        self.assertNotIn(self.agent5.id, agent_ids)
+
+    def test_2_doctor_without_just_talk_is_excluded(self):
+        self.client.force_authenticate(user=self.caller)
+        res = self.client.get('/api/agents/discover/', {
+            'conversation_categories': 'Just Talk',
+            'profession': 'Doctor'
+        })
+        agent_ids = [a['id'] for a in res.data['data']]
+        self.assertNotIn(self.agent2.id, agent_ids)
+
+    def test_3_just_talk_agent_who_is_not_a_doctor_is_excluded(self):
+        self.client.force_authenticate(user=self.caller)
+        res = self.client.get('/api/agents/discover/', {
+            'conversation_categories': 'Just Talk',
+            'profession': 'Doctor'
+        })
+        agent_ids = [a['id'] for a in res.data['data']]
+        self.assertNotIn(self.agent4.id, agent_ids)
+
+    def test_4_doctor_with_advice_when_caller_selected_just_talk_only_is_excluded(self):
+        self.client.force_authenticate(user=self.caller)
+        res = self.client.get('/api/agents/discover/', {
+            'conversation_categories': 'Just Talk',
+            'profession': 'Doctor'
+        })
+        agent_ids = [a['id'] for a in res.data['data']]
+        self.assertNotIn(self.agent2.id, agent_ids)
+
+    def test_5_caller_selects_just_talk_and_advice(self):
+        self.client.force_authenticate(user=self.caller)
+        res = self.client.get('/api/agents/discover/', {
+            'conversation_categories': 'Just Talk,Advice',
+            'profession': 'Doctor'
+        })
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        agent_ids = [a['id'] for a in res.data['data']]
+        self.assertIn(self.agent1.id, agent_ids)
+        self.assertIn(self.agent2.id, agent_ids)
+        self.assertIn(self.agent3.id, agent_ids)
+        self.assertNotIn(self.agent5.id, agent_ids)
+
+    def test_6_busy_agent_is_excluded(self):
+        other_caller = User.objects.create_user(username="other_caller_t6", phone_number="+919876599098", role="CALLER")
+        Call.objects.create(
+            caller=other_caller,
+            receiver=self.agent1,
+            status='ACTIVE',
+            channel_name='busy_test_channel'
+        )
+        self.client.force_authenticate(user=self.caller)
+        res = self.client.get('/api/agents/discover/', {
+            'conversation_categories': 'Just Talk',
+            'profession': 'Doctor'
+        })
+        agent_ids = [a['id'] for a in res.data['data']]
+        self.assertNotIn(self.agent1.id, agent_ids)
+
+    def test_7_off_duty_agent_is_excluded(self):
+        self.client.force_authenticate(user=self.caller)
+        res = self.client.get('/api/agents/discover/', {
+            'conversation_categories': 'Just Talk',
+            'profession': 'Doctor'
+        })
+        agent_ids = [a['id'] for a in res.data['data']]
+        self.assertNotIn(self.agent6.id, agent_ids)
+
+    def test_8_unavailable_agent_is_excluded(self):
+        other_caller = User.objects.create_user(username="other_caller_t8", phone_number="+919876599097", role="CALLER")
+        self.lp1.is_available = False
+        self.lp1.is_busy = True
+        self.lp1.save(update_fields=['is_available', 'is_busy'])
+        Call.objects.create(caller=other_caller, receiver=self.agent1, status='RINGING', channel_name='unavail_chan')
+
+        self.client.force_authenticate(user=self.caller)
+        res = self.client.get('/api/agents/discover/', {
+            'conversation_categories': 'Just Talk',
+            'profession': 'Doctor'
+        })
+        agent_ids = [a['id'] for a in res.data['data']]
+        self.assertNotIn(self.agent1.id, agent_ids)
+
+    def test_9_inactive_agent_is_excluded(self):
+        self.client.force_authenticate(user=self.caller)
+        res = self.client.get('/api/agents/discover/', {
+            'conversation_categories': 'Just Talk',
+            'profession': 'Doctor'
+        })
+        agent_ids = [a['id'] for a in res.data['data']]
+        self.assertNotIn(self.agent7.id, agent_ids)
+
+    def test_10_no_matching_agent_returns_200_with_empty_list(self):
+        self.client.force_authenticate(user=self.caller)
+        res = self.client.get('/api/agents/discover/', {
+            'conversation_categories': 'Career',
+            'profession': 'Teacher'
+        })
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertTrue(res.data['success'])
+        self.assertEqual(res.data['count'], 0)
+        self.assertEqual(res.data['data'], [])
+
+    def test_11_caller_selects_agent_and_requests_call_exact_agent_used(self):
+        self.client.force_authenticate(user=self.caller)
+        res = self.client.post('/api/calls/request/', {'agent_user_id': self.agent1.id}, format='json')
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(res.data['agent']['id'], self.agent1.id)
+
+    def test_12_selected_agent_becomes_unavailable_before_call_request(self):
+        other_caller = User.objects.create_user(username="other_caller_t12", phone_number="+919876599099", role="CALLER")
+        Call.objects.create(caller=other_caller, receiver=self.agent1, status='ACTIVE', channel_name='busy_channel_12')
+        self.client.force_authenticate(user=self.caller)
+
+        res = self.client.post('/api/calls/request/', {'agent_user_id': self.agent1.id}, format='json')
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(res.data['success'])
+        self.assertEqual(res.data['message'], "Selected agent is currently unavailable or busy.")
+
+    def test_13_existing_agent_discovery_functionality_still_works(self):
+        res1 = self.client.get(f'/api/conversation-categories/{self.cat_just_talk.id}/agents/?profession=Doctor')
+        self.assertEqual(res1.status_code, status.HTTP_200_OK)
+        ids1 = [a['id'] for a in res1.data['data']]
+        self.assertIn(self.agent1.id, ids1)
+
+        res2 = self.client.get(f'/api/categories/{self.prof_doctor.name}/listeners/?conversation_categories=Just Talk')
+        self.assertEqual(res2.status_code, status.HTTP_200_OK)
+        ids2 = [a['id'] for a in res2.data['data']['matches']]
+        self.assertIn(self.agent1.id, ids2)
+
 
 
 
