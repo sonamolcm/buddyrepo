@@ -1054,9 +1054,6 @@
                     </select>
                     {% endif %}
 
-                    <button class="btn btn-dark btn-sm" onclick="toggleUserStatus({{ u.id }}, '{{ u.username }}')">
-                      Toggle Status
-                    </button>
                     <button class="btn btn-danger btn-sm" onclick="deleteUserAccount({{ u.id }}, '{{ u.username }}')">
                       Delete
                     </button>
@@ -1601,39 +1598,47 @@
           <textarea id="conv-bio" name="bio" class="form-input" rows="2" placeholder="Brief introduction, listening style, counseling background..."></textarea>
         </div>
 
-        <!-- 7 Agent Interests -->
+        <!-- 9 Agent Interests -->
         <div class="form-group">
           <label class="form-label" style="margin-bottom: 6px;">
             Conversation Interests (Select all that apply)
           </label>
-          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; background: var(--bg-hover); padding: 12px; border-radius: 10px; border: 1px solid var(--border);">
+          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; background: var(--bg-hover); padding: 12px; border-radius: 10px; border: 1px solid var(--border);">
             <label style="display: flex; align-items: center; gap: 6px; font-size: 12.5px; cursor: pointer;">
-              <input type="checkbox" name="interests" value="Conversation" class="interest-checkbox" checked>
-              <span>Conversation</span>
+              <input type="checkbox" name="interests" value="Just talk" class="interest-checkbox" checked>
+              <span>Just talk</span>
             </label>
             <label style="display: flex; align-items: center; gap: 6px; font-size: 12.5px; cursor: pointer;">
-              <input type="checkbox" name="interests" value="Friendship" class="interest-checkbox" checked>
-              <span>Friendship</span>
-            </label>
-            <label style="display: flex; align-items: center; gap: 6px; font-size: 12.5px; cursor: pointer;">
-              <input type="checkbox" name="interests" value="Companionship" class="interest-checkbox">
-              <span>Companionship</span>
+              <input type="checkbox" name="interests" value="Friendly conversation" class="interest-checkbox" checked>
+              <span>Friendly conversation</span>
             </label>
             <label style="display: flex; align-items: center; gap: 6px; font-size: 12.5px; cursor: pointer;">
               <input type="checkbox" name="interests" value="Advice" class="interest-checkbox">
               <span>Advice</span>
             </label>
             <label style="display: flex; align-items: center; gap: 6px; font-size: 12.5px; cursor: pointer;">
-              <input type="checkbox" name="interests" value="Motivation" class="interest-checkbox">
-              <span>Motivation</span>
+              <input type="checkbox" name="interests" value="Career" class="interest-checkbox">
+              <span>Career</span>
             </label>
             <label style="display: flex; align-items: center; gap: 6px; font-size: 12.5px; cursor: pointer;">
-              <input type="checkbox" name="interests" value="Listening" class="interest-checkbox" checked>
-              <span>Listening</span>
+              <input type="checkbox" name="interests" value="Travel" class="interest-checkbox">
+              <span>Travel</span>
             </label>
             <label style="display: flex; align-items: center; gap: 6px; font-size: 12.5px; cursor: pointer;">
-              <input type="checkbox" name="interests" value="Human connection" class="interest-checkbox">
-              <span>Human connection</span>
+              <input type="checkbox" name="interests" value="Elder companion" class="interest-checkbox">
+              <span>Elder companion</span>
+            </label>
+            <label style="display: flex; align-items: center; gap: 6px; font-size: 12.5px; cursor: pointer;">
+              <input type="checkbox" name="interests" value="Student companion" class="interest-checkbox">
+              <span>Student companion</span>
+            </label>
+            <label style="display: flex; align-items: center; gap: 6px; font-size: 12.5px; cursor: pointer;">
+              <input type="checkbox" name="interests" value="Language" class="interest-checkbox">
+              <span>Language</span>
+            </label>
+            <label style="display: flex; align-items: center; gap: 6px; font-size: 12.5px; cursor: pointer;">
+              <input type="checkbox" name="interests" value="Casual" class="interest-checkbox" checked>
+              <span>Casual</span>
             </label>
           </div>
         </div>
@@ -2002,9 +2007,9 @@
       const errBox = document.getElementById('conversion-error-msg');
       if (errBox) errBox.style.display = 'none';
 
-      // Set default interest checks (Conversation, Friendship, Listening)
+      // Set default interest checks (Just talk, Friendly conversation, Casual)
       document.querySelectorAll('.interest-checkbox').forEach(cb => {
-        cb.checked = ['Conversation', 'Friendship', 'Listening'].includes(cb.value);
+        cb.checked = ['Just talk', 'Friendly conversation', 'Casual'].includes(cb.value);
       });
 
       openModal('modal-agent-conversion');
@@ -2464,9 +2469,6 @@
                   <td>
                     <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
                       ${roleActionHtml}
-                      <button class="btn btn-dark btn-sm" onclick="toggleUserStatus(${u.id}, '${safeUsername}')">
-                        Toggle Status
-                      </button>
                       <button class="btn btn-danger btn-sm" onclick="deleteUserAccount(${u.id}, '${safeUsername}')">
                         Delete
                       </button>
