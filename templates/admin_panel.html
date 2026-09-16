@@ -981,10 +981,11 @@
           <table id="users-table">
             <thead>
               <tr>
-                <th>ID / Agent ID</th>
+                <th>ID</th>
+                <th>Agent ID</th>
                 <th>Username / Phone</th>
                 <th>Role</th>
-                <th>Wallet Coins</th>
+                <th id="th-wallet-coins">Wallet Coins</th>
                 <th>Verification</th>
                 <th>Status</th>
                 <th>Joined</th>
@@ -993,93 +994,146 @@
             </thead>
             <tbody>
               {% for u in all_users %}
-              <tr id="user-row-{{ u.id }}" data-search="{{ u.username|lower }} {{ u.phone_number|default:''|lower }} {{ u.first_name|default:''|lower }} {{ u.listener_profile.name|default:''|lower }} {{ u.caller_profile.name|default:''|lower }}" data-role="{{ u.role }}">
-                <td>
-                  #{{ u.id }}
-                  {% if u.is_listener and u.listener_profile %}
-                  <div style="font-family: monospace; font-size: 11px; color: var(--primary); font-weight: 700; margin-top: 2px;">
-                    {{ u.listener_profile.agent_id|default:u.listener_profile.listener_id|default:'AGENT' }}
-                  </div>
-                  {% endif %}
-                </td>
-                <td>
-                  <strong>
-                    {% if u.is_listener and u.listener_profile and u.listener_profile.name %}
-                      {{ u.listener_profile.name }}
-                    {% elif u.first_name %}
-                      {{ u.first_name }}
-                    {% elif u.caller_profile and u.caller_profile.name %}
-                      {{ u.caller_profile.name }}
-                    {% else %}
-                      {{ u.username }}
+                {% if u.is_listener or u.is_agent or u.role|upper == 'AGENT' or u.role|upper == 'LISTENER' or u.role|upper == 'BUDDY' %}
+                {# AGENT ROW: STRICTLY 8 COLUMNS - NO WALLET COINS TD #}
+                <tr id="user-row-{{ u.id }}" class="user-row agent-row" data-search="{{ u.username|lower }} {{ u.phone_number|default:''|lower }} {{ u.first_name|default:''|lower }} {{ u.listener_profile.name|default:''|lower }}" data-role="{{ u.role }}">
+                  <td>#{{ u.id }}</td>
+                  <td>
+                    <span style="font-family: monospace; font-size: 11px; color: var(--primary); font-weight: 700;">
+                      {{ u.listener_profile.agent_id|default:u.listener_profile.listener_id|default:'AGENT' }}
+                    </span>
+                  </td>
+                  <td>
+                    <strong>
+                      {% if u.listener_profile and u.listener_profile.name %}
+                        {{ u.listener_profile.name }}
+                      {% elif u.first_name %}
+                        {{ u.first_name }}
+                      {% else %}
+                        {{ u.username }}
+                      {% endif %}
+                    </strong>
+                    {% if u.phone_number %}
+                    <div style="font-size: 12px; color: var(--text-muted);">{{ u.phone_number }}</div>
                     {% endif %}
-                  </strong>
-                  {% if u.phone_number %}
-                  <div style="font-size: 12px; color: var(--text-muted);">{{ u.phone_number }}</div>
-                  {% endif %}
-                </td>
-                <td>
-                  {% if u.role == 'ADMIN' %}
-                  <span class="badge badge-warning">ADMIN</span>
-                  {% elif u.is_listener %}
-                  <span class="badge badge-primary">AGENT / LISTENER</span>
-                  {% else %}
-                  <span class="badge badge-gray">CALLER</span>
-                  {% endif %}
-                </td>
-                <td>
-                  {% if u.is_listener or u.is_agent or u.role == 'AGENT' or u.role == 'LISTENER' or u.role == 'BUDDY' %}
-                  {# Empty for Agent rows #}
-                  {% elif u.wallet %}
-                  <strong>🪙 {{ u.wallet.balance }}</strong>
-                  {% else %}
-                  🪙 0
-                  {% endif %}
-                </td>
-                <td>
-                  {% if u.is_verified %}
-                  <span class="badge badge-success">Verified</span>
-                  {% else %}
-                  <span class="badge badge-warning">Unverified</span>
-                  {% endif %}
-                </td>
-                <td>
-                  {% if not u.is_active %}
-                  <span class="badge badge-danger" id="user-status-badge-{{ u.id }}">Blocked</span>
-                  {% elif u.is_listener or u.is_agent %}
-                    {% if u.listener_profile and u.listener_profile.is_on_duty %}
+                  </td>
+                  <td class="role-cell-agent" colspan="2">
+                    <span class="badge badge-primary">AGENT / LISTENER</span>
+                  </td>
+                  <td>
+                    {% if u.is_verified %}
+                    <span class="badge badge-success">Verified</span>
+                    {% else %}
+                    <span class="badge badge-warning">Unverified</span>
+                    {% endif %}
+                  </td>
+                  <td>
+                    {% if not u.is_active %}
+                    <span class="badge badge-danger" id="user-status-badge-{{ u.id }}">Blocked</span>
+                    {% elif u.listener_profile and u.listener_profile.is_on_duty %}
                     <span class="badge badge-success" id="user-status-badge-{{ u.id }}">Online</span>
                     {% else %}
                     <span class="badge badge-gray" id="user-status-badge-{{ u.id }}">Offline</span>
                     {% endif %}
-                  {% else %}
-                  <span class="badge badge-success" id="user-status-badge-{{ u.id }}">Active</span>
-                  {% endif %}
-                </td>
-                <td style="color: var(--text-muted);">{{ u.created_at|date:"M d, Y" }}</td>
-                <td>
-                  <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
-                    {% if u.role == 'ADMIN' %}
-                    <span class="badge badge-warning" title="Admin role managed securely via Django Admin">ADMIN</span>
-                    {% else %}
-                    <select class="select-input user-role-select" style="padding: 3px 6px; font-size: 12px; height: 28px; width: 86px; border-radius: 6px;"
-                            id="role-select-{{ u.id }}"
-                            data-userid="{{ u.id }}"
-                            data-current-role="{% if u.is_agent %}AGENT{% else %}USER{% endif %}"
-                            onchange="handleUserRoleChange({{ u.id }}, this, '{{ u.username|escapejs }}', '{{ u.phone_number|default:''|escapejs }}', '{{ u.first_name|default:''|escapejs }}')">
-                      <option value="USER" {% if not u.is_agent %}selected{% endif %}>User</option>
-                      <option value="AGENT" {% if u.is_agent %}selected{% endif %}>Agent</option>
-                    </select>
+                  </td>
+                  <td style="color: var(--text-muted);">{{ u.created_at|date:"M d, Y" }}</td>
+                  <td>
+                    <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
+                      <select class="select-input user-role-select" style="padding: 3px 6px; font-size: 12px; height: 28px; width: 86px; border-radius: 6px;"
+                              id="role-select-{{ u.id }}"
+                              data-userid="{{ u.id }}"
+                              data-current-role="AGENT"
+                              onchange="handleUserRoleChange({{ u.id }}, this, '{{ u.username|escapejs }}', '{{ u.phone_number|default:''|escapejs }}', '{{ u.first_name|default:''|escapejs }}')">
+                        <option value="USER">User</option>
+                        <option value="AGENT" selected>Agent</option>
+                      </select>
+                      <button class="btn btn-sm" style="background: rgba(59, 130, 246, 0.15); color: var(--primary); border: 1px solid rgba(59, 130, 246, 0.3); font-weight: 600; padding: 4px 10px; border-radius: 6px;" onclick="openEditUserModal({{ u.id }}, 'AGENT')">
+                        Edit
+                      </button>
+                      <button class="btn btn-danger btn-sm" onclick="deleteUserAccount({{ u.id }}, '{{ u.username }}')">
+                        Delete
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+                {% else %}
+                {# CALLER / ADMIN ROW: FULL 9 COLUMNS INCLUDING WALLET COINS #}
+                <tr id="user-row-{{ u.id }}" class="user-row caller-row" data-search="{{ u.username|lower }} {{ u.phone_number|default:''|lower }} {{ u.first_name|default:''|lower }} {{ u.caller_profile.name|default:''|lower }}" data-role="{{ u.role }}">
+                  <td>#{{ u.id }}</td>
+                  <td style="color: var(--text-muted);">-</td>
+                  <td>
+                    <strong>
+                      {% if u.caller_profile and u.caller_profile.name %}
+                        {{ u.caller_profile.name }}
+                      {% elif u.first_name %}
+                        {{ u.first_name }}
+                      {% else %}
+                        {{ u.username }}
+                      {% endif %}
+                    </strong>
+                    {% if u.phone_number %}
+                    <div style="font-size: 12px; color: var(--text-muted);">{{ u.phone_number }}</div>
                     {% endif %}
-
-                    <button class="btn btn-danger btn-sm" onclick="deleteUserAccount({{ u.id }}, '{{ u.username }}')">
-                      Delete
-                    </button>
-                  </div>
-                </td>
-              </tr>
+                  </td>
+                  <td>
+                    {% if u.role == 'ADMIN' %}
+                    <span class="badge badge-warning">ADMIN</span>
+                    {% else %}
+                    <span class="badge badge-gray">CALLER</span>
+                    {% endif %}
+                  </td>
+                  <td class="coins-cell">
+                    {% if u.role == 'ADMIN' %}
+                    -
+                    {% elif u.wallet %}
+                    <strong>🪙 {{ u.wallet.balance }}</strong>
+                    {% else %}
+                    🪙 0
+                    {% endif %}
+                  </td>
+                  <td>
+                    {% if u.is_verified %}
+                    <span class="badge badge-success">Verified</span>
+                    {% else %}
+                    <span class="badge badge-warning">Unverified</span>
+                    {% endif %}
+                  </td>
+                  <td>
+                    {% if not u.is_active %}
+                    <span class="badge badge-danger" id="user-status-badge-{{ u.id }}">Blocked</span>
+                    {% else %}
+                    <span class="badge badge-success" id="user-status-badge-{{ u.id }}">Active</span>
+                    {% endif %}
+                  </td>
+                  <td style="color: var(--text-muted);">{{ u.created_at|date:"M d, Y" }}</td>
+                  <td>
+                    <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
+                      {% if u.role == 'ADMIN' %}
+                      <span class="badge badge-warning" title="Admin role managed securely via Django Admin">ADMIN</span>
+                      {% else %}
+                      <select class="select-input user-role-select" style="padding: 3px 6px; font-size: 12px; height: 28px; width: 86px; border-radius: 6px;"
+                              id="role-select-{{ u.id }}"
+                              data-userid="{{ u.id }}"
+                              data-current-role="USER"
+                              onchange="handleUserRoleChange({{ u.id }}, this, '{{ u.username|escapejs }}', '{{ u.phone_number|default:''|escapejs }}', '{{ u.first_name|default:''|escapejs }}')">
+                        <option value="USER" selected>User</option>
+                        <option value="AGENT">Agent</option>
+                      </select>
+                      {% endif %}
+                      {% if u.role != 'ADMIN' %}
+                      <button class="btn btn-sm" style="background: rgba(59, 130, 246, 0.15); color: var(--primary); border: 1px solid rgba(59, 130, 246, 0.3); font-weight: 600; padding: 4px 10px; border-radius: 6px;" onclick="openEditUserModal({{ u.id }}, 'CALLER')">
+                        Edit
+                      </button>
+                      {% endif %}
+                      <button class="btn btn-danger btn-sm" onclick="deleteUserAccount({{ u.id }}, '{{ u.username }}')">
+                        Delete
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+                {% endif %}
               {% empty %}
-              <tr><td colspan="8" style="text-align: center; color: var(--text-muted); padding: 26px;">No users found.</td></tr>
+              <tr><td colspan="9" style="text-align: center; color: var(--text-muted); padding: 26px;">No users found.</td></tr>
               {% endfor %}
             </tbody>
           </table>
@@ -1766,6 +1820,132 @@
     </div>
   </div>
 
+  <!-- MODAL: EDIT USER (CALLER OR AGENT) -->
+  <div id="modal-edit-user" class="modal-overlay">
+    <div class="modal-card" style="max-width: 580px;">
+      <div class="modal-header">
+        <div>
+          <h2 id="edit-modal-title" style="font-family: 'Outfit'; font-size: 19px;">✏️ Edit User Details</h2>
+          <p id="edit-modal-subtitle" style="font-size: 12px; color: var(--text-muted); margin-top: 2px;">
+            Update profile information
+          </p>
+        </div>
+        <button class="modal-close" onclick="closeModal('modal-edit-user')">&times;</button>
+      </div>
+
+      <div id="edit-user-loading" style="text-align: center; padding: 28px; color: var(--text-muted);">
+        Loading user details...
+      </div>
+
+      <form id="edit-user-form" style="display: none;" onsubmit="submitEditUser(event)">
+        <input type="hidden" id="edit-user-id" name="user_id">
+        <input type="hidden" id="edit-user-role" name="user_role">
+
+        <!-- CALLER FIELDS -->
+        <div id="edit-caller-fields" style="display: none;">
+          <div class="grid-2">
+            <div class="form-group">
+              <label class="form-label">Full Name *</label>
+              <input type="text" id="edit-caller-name" class="form-input" placeholder="e.g. John Doe">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Phone Number *</label>
+              <input type="text" id="edit-caller-phone" class="form-input" placeholder="e.g. +919876543210">
+            </div>
+          </div>
+
+          <div class="grid-2">
+            <div class="form-group">
+              <label class="form-label">Age</label>
+              <input type="number" id="edit-caller-age" class="form-input" min="10" max="99" placeholder="e.g. 25">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Gender</label>
+              <select id="edit-caller-gender" class="form-input">
+                <option value="">Select Gender...</option>
+                <option value="Male">Male</option>
+                <option value="Female">Female</option>
+                <option value="Other">Other</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Language</label>
+            <input type="text" id="edit-caller-language" class="form-input" placeholder="e.g. English, Hindi">
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Interests (Comma-separated)</label>
+            <input type="text" id="edit-caller-interests" class="form-input" placeholder="e.g. Casual, Music, Movies">
+          </div>
+        </div>
+
+        <!-- AGENT FIELDS -->
+        <div id="edit-agent-fields" style="display: none;">
+          <div class="grid-2">
+            <div class="form-group">
+              <label class="form-label">Display / Listener Name *</label>
+              <input type="text" id="edit-agent-name" class="form-input" placeholder="e.g. Arun Kumar">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Gender</label>
+              <select id="edit-agent-gender" class="form-input">
+                <option value="">Select Gender...</option>
+                <option value="Male">Male</option>
+                <option value="Female">Female</option>
+                <option value="Other">Other</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="grid-2">
+            <div class="form-group">
+              <label class="form-label">Spoken Languages</label>
+              <input type="text" id="edit-agent-language" class="form-input" placeholder="e.g. English, Hindi">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Profession / Category</label>
+              <select id="edit-agent-category" class="form-input">
+                <option value="">General Listener</option>
+                {% for c in categories %}
+                <option value="{{ c.name }}">{{ c.name }}</option>
+                {% endfor %}
+              </select>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Bio / Profile Summary</label>
+            <textarea id="edit-agent-bio" class="form-input" rows="3" placeholder="Brief introduction, counseling background..."></textarea>
+          </div>
+
+          <div class="grid-2" style="margin-top: 10px;">
+            <div class="form-group">
+              <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer;">
+                <input type="checkbox" id="edit-agent-available" style="width: 16px; height: 16px;">
+                <span>Available for incoming calls</span>
+              </label>
+            </div>
+            <div class="form-group">
+              <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer;">
+                <input type="checkbox" id="edit-agent-active" style="width: 16px; height: 16px;">
+                <span>Account Active (Not blocked)</span>
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <div id="edit-user-error-msg" style="display: none; color: #ef4444; background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.3); border-radius: 8px; padding: 10px; font-size: 13px; margin-top: 10px;"></div>
+
+        <div style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; border-top: 1px solid var(--border); padding-top: 14px;">
+          <button type="button" class="btn btn-dark" onclick="closeModal('modal-edit-user')">Cancel</button>
+          <button type="submit" class="btn btn-primary" id="btn-save-user-edit">Save Changes</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
   <!-- Toast Notification -->
   <div id="toast" class="toast"></div>
 
@@ -2241,6 +2421,27 @@
       const role = rInput ? rInput.value : '';
       const rows = document.querySelectorAll('#users-table tbody tr');
 
+      const thCoins = document.getElementById('th-wallet-coins');
+      if (thCoins) {
+        if (role === 'LISTENER') {
+          thCoins.style.display = 'none';
+        } else {
+          thCoins.style.display = '';
+        }
+      }
+
+      // Update role cell colspan for agent rows:
+      // When filtered to LISTENER, th-wallet-coins is hidden so agent-role-cell has colspan=1
+      // When viewing All Roles (mixed), th-wallet-coins is visible so agent-role-cell has colspan=2
+      const agentRoleCells = document.querySelectorAll('#users-table .role-cell-agent');
+      agentRoleCells.forEach(cell => {
+        if (role === 'LISTENER') {
+          cell.setAttribute('colspan', '1');
+        } else {
+          cell.setAttribute('colspan', '2');
+        }
+      });
+
       rows.forEach(row => {
         const text = row.getAttribute('data-search') || '';
         const userRole = row.getAttribute('data-role') || '';
@@ -2254,6 +2455,152 @@
         }
         row.style.display = (matchesQ && matchesRole) ? '' : 'none';
       });
+    }
+
+    // ========================================================
+    // EDIT USER MODAL CONTROLLER (CALLER & AGENT)
+    // ========================================================
+    async function openEditUserModal(userId, role) {
+      openModal('modal-edit-user');
+      const loading = document.getElementById('edit-user-loading');
+      const form = document.getElementById('edit-user-form');
+      const errBox = document.getElementById('edit-user-error-msg');
+      const callerFields = document.getElementById('edit-caller-fields');
+      const agentFields = document.getElementById('edit-agent-fields');
+      const saveBtn = document.getElementById('btn-save-user-edit');
+
+      loading.style.display = 'block';
+      form.style.display = 'none';
+      if (errBox) errBox.style.display = 'none';
+      saveBtn.disabled = false;
+      saveBtn.textContent = 'Save Changes';
+
+      document.getElementById('edit-user-id').value = userId;
+      document.getElementById('edit-user-role').value = role;
+
+      const isAgent = (role === 'AGENT');
+      document.getElementById('edit-modal-title').textContent = isAgent ? '✏️ Edit Agent Profile' : '✏️ Edit Caller Profile';
+      document.getElementById('edit-modal-subtitle').textContent = `Manage information for User #${userId}`;
+
+      if (isAgent) {
+        agentFields.style.display = 'block';
+        callerFields.style.display = 'none';
+        try {
+          const res = await fetch(`/api/listeners/${userId}/`);
+          const data = await res.json();
+          if (res.ok && data.success) {
+            const d = data.data;
+            document.getElementById('edit-agent-name').value = d.name || d.username || '';
+            document.getElementById('edit-agent-gender').value = d.gender || '';
+            document.getElementById('edit-agent-language').value = d.language || 'English';
+            const catSelect = document.getElementById('edit-agent-category');
+            if (catSelect) {
+              catSelect.value = (d.profession && d.profession.name) ? d.profession.name : ((d.category && d.category.name) ? d.category.name : '');
+            }
+            document.getElementById('edit-agent-bio').value = d.bio || '';
+            document.getElementById('edit-agent-available').checked = Boolean(d.is_available);
+            document.getElementById('edit-agent-active').checked = Boolean(d.is_active);
+            loading.style.display = 'none';
+            form.style.display = 'block';
+          } else {
+            loading.innerHTML = `<div style="color: #ef4444; padding: 16px;">${data.message || 'Failed to load Agent details.'}</div>`;
+          }
+        } catch (err) {
+          loading.innerHTML = '<div style="color: #ef4444; padding: 16px;">Error connecting to server to load Agent details.</div>';
+        }
+      } else {
+        callerFields.style.display = 'block';
+        agentFields.style.display = 'none';
+        try {
+          const res = await fetch(`/api/callers/${userId}/`);
+          const data = await res.json();
+          if (res.ok && data.success) {
+            const d = data.data;
+            document.getElementById('edit-caller-name').value = d.name || '';
+            document.getElementById('edit-caller-phone').value = d.phone_number || '';
+            document.getElementById('edit-caller-age').value = d.age || '';
+            document.getElementById('edit-caller-gender').value = d.gender || '';
+            document.getElementById('edit-caller-language').value = d.language || '';
+            const interestsStr = Array.isArray(d.interests) ? d.interests.join(', ') : (d.interests || '');
+            document.getElementById('edit-caller-interests').value = interestsStr;
+            loading.style.display = 'none';
+            form.style.display = 'block';
+          } else {
+            loading.innerHTML = `<div style="color: #ef4444; padding: 16px;">${data.message || 'Failed to load Caller details.'}</div>`;
+          }
+        } catch (err) {
+          loading.innerHTML = '<div style="color: #ef4444; padding: 16px;">Error connecting to server to load Caller details.</div>';
+        }
+      }
+    }
+
+    async function submitEditUser(e) {
+      e.preventDefault();
+      const userId = document.getElementById('edit-user-id').value;
+      const role = document.getElementById('edit-user-role').value;
+      const saveBtn = document.getElementById('btn-save-user-edit');
+      const errBox = document.getElementById('edit-user-error-msg');
+
+      if (errBox) errBox.style.display = 'none';
+      saveBtn.disabled = true;
+      saveBtn.textContent = 'Saving...';
+
+      const isAgent = (role === 'AGENT');
+      const url = isAgent ? `/api/listeners/${userId}/` : `/api/callers/${userId}/`;
+      let payload = {};
+
+      if (isAgent) {
+        payload = {
+          name: document.getElementById('edit-agent-name').value.trim(),
+          gender: document.getElementById('edit-agent-gender').value,
+          language: document.getElementById('edit-agent-language').value.trim(),
+          profession: document.getElementById('edit-agent-category').value,
+          bio: document.getElementById('edit-agent-bio').value.trim(),
+          is_available: document.getElementById('edit-agent-available').checked,
+          is_active: document.getElementById('edit-agent-active').checked
+        };
+      } else {
+        const ageVal = document.getElementById('edit-caller-age').value.trim();
+        payload = {
+          name: document.getElementById('edit-caller-name').value.trim(),
+          phone_number: document.getElementById('edit-caller-phone').value.trim(),
+          age: ageVal ? parseInt(ageVal, 10) : null,
+          gender: document.getElementById('edit-caller-gender').value,
+          language: document.getElementById('edit-caller-language').value.trim(),
+          interests: document.getElementById('edit-caller-interests').value.trim()
+        };
+      }
+
+      try {
+        const res = await fetch(url, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        if (res.ok && data.success) {
+          showToast(`✅ ${isAgent ? 'Agent' : 'Caller'} updated successfully!`);
+          closeModal('modal-edit-user');
+          await fetchLiveAdminData(true);
+        } else {
+          let errText = data.message || 'Error updating user profile.';
+          if (data.errors) {
+            errText += ' ' + (typeof data.errors === 'object' ? JSON.stringify(data.errors) : data.errors);
+          }
+          if (errBox) {
+            errBox.textContent = errText;
+            errBox.style.display = 'block';
+          }
+        }
+      } catch (err) {
+        if (errBox) {
+          errBox.textContent = 'Server connection error updating user.';
+          errBox.style.display = 'block';
+        }
+      } finally {
+        saveBtn.disabled = false;
+        saveBtn.textContent = 'Save Changes';
+      }
     }
 
     // Search Calls Table
@@ -2426,18 +2773,16 @@
           const usersTbody = document.querySelector('#users-table tbody');
           if (usersTbody) {
             usersTbody.innerHTML = data.users.map(u => {
-              const isAgent = Boolean(u.is_agent || u.is_listener || u.role === 'LISTENER' || u.role === 'AGENT' || u.role === 'BUDDY');
-              let roleBadge = '<span class="badge badge-gray">CALLER</span>';
-              if (u.role === 'ADMIN') {
-                roleBadge = '<span class="badge badge-warning">ADMIN</span>';
-              } else if (isAgent) {
-                roleBadge = '<span class="badge badge-primary">AGENT / LISTENER</span>';
-              }
-
-              let coinsHtml = '';
-              if (!isAgent) {
-                coinsHtml = `<strong>🪙 ${u.coins || 0}</strong>`;
-              }
+              const roleUpper = String(u.role || '').toUpperCase();
+              const isAgent = Boolean(
+                u.is_agent || 
+                u.is_listener || 
+                Boolean(u.agent_id) || 
+                Boolean(u.is_earned) || 
+                roleUpper === 'AGENT' || 
+                roleUpper === 'LISTENER' || 
+                roleUpper === 'BUDDY'
+              );
 
               const verifBadge = u.is_verified ?
                 '<span class="badge badge-success">Verified</span>' :
@@ -2458,55 +2803,101 @@
 
               const phoneHtml = u.phone ? `<div style="font-size: 12px; color: var(--text-muted);">${u.phone}</div>` : '';
               const searchAttr = `${(u.username||'').toLowerCase()} ${(u.phone||'').toLowerCase()} ${(u.name||'').toLowerCase()}`;
-              const agentIdHtml = (isAgent && u.agent_id) ? `<div style="font-family: monospace; font-size: 11px; color: var(--primary); font-weight: 700; margin-top: 2px;">${u.agent_id}</div>` : '';
-
               const safeUsername = (u.username || '').replace(/'/g, "\\'");
               const safePhone = (u.phone || '').replace(/'/g, "\\'");
               const safeName = (u.name || '').replace(/'/g, "\\'");
+              const displayName = u.name || u.username;
 
-              let roleActionHtml = '';
-              if (u.role === 'ADMIN') {
-                roleActionHtml = '<span class="badge badge-warning" title="Admin role managed securely via Django Admin">ADMIN</span>';
-              } else {
-                roleActionHtml = `
+              if (isAgent) {
+                // AGENT ROW: STRICTLY 8 COLUMNS - NO WALLET COINS TD
+                const agentIdStr = u.agent_id || ('AGT' + String(u.id).padStart(5, '0'));
+                const roleSelect = `
                   <select class="select-input user-role-select" style="padding: 3px 6px; font-size: 12px; height: 28px; width: 86px; border-radius: 6px;"
                           id="role-select-${u.id}"
                           data-userid="${u.id}"
-                          data-current-role="${isAgent ? 'AGENT' : 'USER'}"
+                          data-current-role="AGENT"
                           onchange="handleUserRoleChange(${u.id}, this, '${safeUsername}', '${safePhone}', '${safeName}')">
-                    <option value="USER" ${!isAgent ? 'selected' : ''}>User</option>
-                    <option value="AGENT" ${isAgent ? 'selected' : ''}>Agent</option>
+                    <option value="USER">User</option>
+                    <option value="AGENT" selected>Agent</option>
                   </select>
                 `;
+                return `
+                  <tr id="user-row-${u.id}" class="user-row agent-row" data-search="${searchAttr}" data-role="${u.role}">
+                    <td>#${u.id}</td>
+                    <td><span style="font-family: monospace; font-size: 11px; color: var(--primary); font-weight: 700;">${agentIdStr}</span></td>
+                    <td>
+                      <strong>${displayName}</strong>
+                      ${phoneHtml}
+                    </td>
+                    <td class="role-cell-agent" colspan="2"><span class="badge badge-primary">AGENT / LISTENER</span></td>
+                    <td>${verifBadge}</td>
+                    <td>${activeBadge}</td>
+                    <td style="color: var(--text-muted);">${u.created_at || ''}</td>
+                    <td>
+                      <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
+                        ${roleSelect}
+                        <button class="btn btn-sm" style="background: rgba(59, 130, 246, 0.15); color: var(--primary); border: 1px solid rgba(59, 130, 246, 0.3); font-weight: 600; padding: 4px 10px; border-radius: 6px;" onclick="openEditUserModal(${u.id}, 'AGENT')">
+                          Edit
+                        </button>
+                        <button class="btn btn-danger btn-sm" onclick="deleteUserAccount(${u.id}, '${safeUsername}')">
+                          Delete
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                `;
+              } else {
+                // CALLER / ADMIN ROW: FULL 9 COLUMNS INCLUDING WALLET COINS
+                let roleBadge = '<span class="badge badge-gray">CALLER</span>';
+                let roleActionHtml = '';
+                if (roleUpper === 'ADMIN') {
+                  roleBadge = '<span class="badge badge-warning">ADMIN</span>';
+                  roleActionHtml = '<span class="badge badge-warning" title="Admin role managed securely via Django Admin">ADMIN</span>';
+                } else {
+                  roleActionHtml = `
+                    <select class="select-input user-role-select" style="padding: 3px 6px; font-size: 12px; height: 28px; width: 86px; border-radius: 6px;"
+                            id="role-select-${u.id}"
+                            data-userid="${u.id}"
+                            data-current-role="USER"
+                            onchange="handleUserRoleChange(${u.id}, this, '${safeUsername}', '${safePhone}', '${safeName}')">
+                      <option value="USER" selected>User</option>
+                      <option value="AGENT">Agent</option>
+                    </select>
+                  `;
+                }
+
+                const coinsCell = roleUpper === 'ADMIN' ? '-' : `<strong>🪙 ${u.coins || 0}</strong>`;
+                const editBtn = roleUpper === 'ADMIN' ? '' : `
+                  <button class="btn btn-sm" style="background: rgba(59, 130, 246, 0.15); color: var(--primary); border: 1px solid rgba(59, 130, 246, 0.3); font-weight: 600; padding: 4px 10px; border-radius: 6px;" onclick="openEditUserModal(${u.id}, 'CALLER')">
+                    Edit
+                  </button>
+                `;
+
+                return `
+                  <tr id="user-row-${u.id}" class="user-row caller-row" data-search="${searchAttr}" data-role="${u.role}">
+                    <td>#${u.id}</td>
+                    <td style="color: var(--text-muted);">-</td>
+                    <td>
+                      <strong>${displayName}</strong>
+                      ${phoneHtml}
+                    </td>
+                    <td>${roleBadge}</td>
+                    <td class="coins-cell">${coinsCell}</td>
+                    <td>${verifBadge}</td>
+                    <td>${activeBadge}</td>
+                    <td style="color: var(--text-muted);">${u.created_at || ''}</td>
+                    <td>
+                      <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
+                        ${roleActionHtml}
+                        ${editBtn}
+                        <button class="btn btn-danger btn-sm" onclick="deleteUserAccount(${u.id}, '${safeUsername}')">
+                          Delete
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                `;
               }
-
-              const displayName = u.name || u.username;
-
-              return `
-                <tr id="user-row-${u.id}" data-search="${searchAttr}" data-role="${u.role}">
-                  <td>
-                    #${u.id}
-                    ${agentIdHtml}
-                  </td>
-                  <td>
-                    <strong>${displayName}</strong>
-                    ${phoneHtml}
-                  </td>
-                  <td>${roleBadge}</td>
-                  <td>${coinsHtml}</td>
-                  <td>${verifBadge}</td>
-                  <td>${activeBadge}</td>
-                  <td style="color: var(--text-muted);">${u.created_at || ''}</td>
-                  <td>
-                    <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
-                      ${roleActionHtml}
-                      <button class="btn btn-danger btn-sm" onclick="deleteUserAccount(${u.id}, '${safeUsername}')">
-                        Delete
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              `;
             }).join('');
 
             filterUsersTable();
