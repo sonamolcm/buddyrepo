@@ -993,7 +993,7 @@
             </thead>
             <tbody>
               {% for u in all_users %}
-              <tr id="user-row-{{ u.id }}" data-search="{{ u.username|lower }} {{ u.phone_number|default:''|lower }} {{ u.first_name|default:''|lower }}" data-role="{{ u.role }}">
+              <tr id="user-row-{{ u.id }}" data-search="{{ u.username|lower }} {{ u.phone_number|default:''|lower }} {{ u.first_name|default:''|lower }} {{ u.listener_profile.name|default:''|lower }} {{ u.caller_profile.name|default:''|lower }}" data-role="{{ u.role }}">
                 <td>
                   #{{ u.id }}
                   {% if u.is_listener and u.listener_profile %}
@@ -1003,7 +1003,17 @@
                   {% endif %}
                 </td>
                 <td>
-                  <strong>{{ u.username }}</strong>
+                  <strong>
+                    {% if u.is_listener and u.listener_profile and u.listener_profile.name %}
+                      {{ u.listener_profile.name }}
+                    {% elif u.first_name %}
+                      {{ u.first_name }}
+                    {% elif u.caller_profile and u.caller_profile.name %}
+                      {{ u.caller_profile.name }}
+                    {% else %}
+                      {{ u.username }}
+                    {% endif %}
+                  </strong>
                   {% if u.phone_number %}
                   <div style="font-size: 12px; color: var(--text-muted);">{{ u.phone_number }}</div>
                   {% endif %}
@@ -1018,8 +1028,8 @@
                   {% endif %}
                 </td>
                 <td>
-                  {% if u.agent_wallet %}
-                  <strong>🪙 {{ u.agent_wallet.balance }}</strong> <span style="font-size: 11px; color: var(--text-muted);">(Earned)</span>
+                  {% if u.is_listener or u.is_agent or u.role == 'AGENT' or u.role == 'LISTENER' or u.role == 'BUDDY' %}
+                  <span style="color: var(--text-muted);">-</span>
                   {% elif u.wallet %}
                   <strong>🪙 {{ u.wallet.balance }}</strong>
                   {% else %}
@@ -2057,6 +2067,8 @@
           showToast(`✅ Successfully promoted to Agent! ID: ${assignedId}`);
           pendingConversionUserId = null;
           closeModal('modal-agent-conversion');
+          const userRow = document.getElementById(`user-row-${userId}`);
+          if (userRow) userRow.setAttribute('data-role', 'AGENT');
           await fetchLiveAdminData(true);
         } else {
           let errText = data.message || 'Error promoting user to Agent.';
@@ -2235,6 +2247,9 @@
         const matchesQ = !q || text.includes(q);
         let matchesRole = !role || userRole === role;
         if (role === 'LISTENER' && (userRole === 'AGENT' || userRole === 'BUDDY' || userRole === 'LISTENER')) {
+          matchesRole = true;
+        }
+        if (role === 'CALLER' && (userRole === 'CALLER' || userRole === 'USER')) {
           matchesRole = true;
         }
         row.style.display = (matchesQ && matchesRole) ? '' : 'none';
@@ -2419,9 +2434,9 @@
                 roleBadge = '<span class="badge badge-primary">AGENT / LISTENER</span>';
               }
 
-              let coinsHtml = `<strong>🪙 ${u.coins || 0}</strong>`;
-              if (u.is_earned) {
-                coinsHtml += ' <span style="font-size: 11px; color: var(--text-muted);">(Earned)</span>';
+              let coinsHtml = '<span style="color: var(--text-muted);">-</span>';
+              if (!isAgent) {
+                coinsHtml = `<strong>🪙 ${u.coins || 0}</strong>`;
               }
 
               const verifBadge = u.is_verified ?
@@ -2465,6 +2480,8 @@
                 `;
               }
 
+              const displayName = u.name || u.username;
+
               return `
                 <tr id="user-row-${u.id}" data-search="${searchAttr}" data-role="${u.role}">
                   <td>
@@ -2472,7 +2489,7 @@
                     ${agentIdHtml}
                   </td>
                   <td>
-                    <strong>${u.username}</strong>
+                    <strong>${displayName}</strong>
                     ${phoneHtml}
                   </td>
                   <td>${roleBadge}</td>
