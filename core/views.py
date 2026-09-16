@@ -362,13 +362,29 @@ class CallerSignupCompleteProfileView(APIView):
                 user=user,
                 defaults={'balance': 300}
             )
-            if wallet_created:
-                WalletTransaction.objects.create(
-                    wallet=wallet,
-                    transaction_type='CREDIT',
-                    amount=300,
-                    description='Welcome bonus coins for new caller'
-                )
+            welcome_bonus_already_given = WalletTransaction.objects.filter(
+                wallet=wallet,
+                transaction_type='CREDIT',
+                description='Welcome bonus coins for new caller'
+            ).exists()
+
+            if not welcome_bonus_already_given:
+                if wallet_created:
+                    WalletTransaction.objects.create(
+                        wallet=wallet,
+                        transaction_type='CREDIT',
+                        amount=300,
+                        description='Welcome bonus coins for new caller'
+                    )
+                elif wallet.balance == 50 and not wallet.transactions.exists():
+                    wallet.balance = 300
+                    wallet.save(update_fields=['balance'])
+                    WalletTransaction.objects.create(
+                        wallet=wallet,
+                        transaction_type='CREDIT',
+                        amount=300,
+                        description='Welcome bonus coins for new caller'
+                    )
 
         # Issue JWT tokens
         refresh = RefreshToken.for_user(user)
@@ -1350,10 +1366,18 @@ class WalletView(APIView):
         user = _resolve_user_for_wallet(request, **kwargs)
         if not user:
             return Response({"error": "User not found."}, status=status.HTTP_404_NOT_FOUND)
-        wallet, _ = Wallet.objects.get_or_create(
+        init_balance = 300 if getattr(user, 'is_caller', False) else 50
+        wallet, wallet_created = Wallet.objects.get_or_create(
             user=user,
-            defaults={'balance': 50}
+            defaults={'balance': init_balance}
         )
+        if wallet_created and init_balance == 300:
+            WalletTransaction.objects.get_or_create(
+                wallet=wallet,
+                transaction_type='CREDIT',
+                amount=300,
+                defaults={'description': 'Welcome bonus coins for new caller'}
+            )
         return Response({
             "balance": wallet.balance,
             "coins": wallet.balance
@@ -1464,10 +1488,18 @@ class GetCoinsView(APIView):
                 "message": "User not found or authentication required."
             }, status=status.HTTP_404_NOT_FOUND)
 
-        wallet, _ = Wallet.objects.get_or_create(
+        init_balance = 300 if getattr(user, 'is_caller', False) else 50
+        wallet, wallet_created = Wallet.objects.get_or_create(
             user=user,
-            defaults={'balance': 50}
+            defaults={'balance': init_balance}
         )
+        if wallet_created and init_balance == 300:
+            WalletTransaction.objects.get_or_create(
+                wallet=wallet,
+                transaction_type='CREDIT',
+                amount=300,
+                defaults={'description': 'Welcome bonus coins for new caller'}
+            )
         return Response({
             "success": True,
             "message": "Coins balance retrieved successfully.",
@@ -4732,13 +4764,29 @@ class WebVerifyOTPView(APIView):
                 user=user,
                 defaults={'balance': 300}
             )
-            if wallet_created:
-                WalletTransaction.objects.create(
-                    wallet=wallet,
-                    transaction_type='CREDIT',
-                    amount=300,
-                    description='Welcome bonus coins for new caller'
-                )
+            welcome_bonus_already_given = WalletTransaction.objects.filter(
+                wallet=wallet,
+                transaction_type='CREDIT',
+                description='Welcome bonus coins for new caller'
+            ).exists()
+
+            if not welcome_bonus_already_given:
+                if wallet_created:
+                    WalletTransaction.objects.create(
+                        wallet=wallet,
+                        transaction_type='CREDIT',
+                        amount=300,
+                        description='Welcome bonus coins for new caller'
+                    )
+                elif wallet.balance == 50 and not wallet.transactions.exists():
+                    wallet.balance = 300
+                    wallet.save(update_fields=['balance'])
+                    WalletTransaction.objects.create(
+                        wallet=wallet,
+                        transaction_type='CREDIT',
+                        amount=300,
+                        description='Welcome bonus coins for new caller'
+                    )
 
         refresh = RefreshToken.for_user(user)
 
@@ -5339,13 +5387,29 @@ class CallerListCreateView(APIView):
             user=user,
             defaults={'balance': 300}
         )
-        if wallet_created:
-            WalletTransaction.objects.create(
-                wallet=wallet,
-                transaction_type='CREDIT',
-                amount=300,
-                description='Welcome bonus coins for new caller'
-            )
+        welcome_bonus_already_given = WalletTransaction.objects.filter(
+            wallet=wallet,
+            transaction_type='CREDIT',
+            description='Welcome bonus coins for new caller'
+        ).exists()
+
+        if not welcome_bonus_already_given:
+            if wallet_created:
+                WalletTransaction.objects.create(
+                    wallet=wallet,
+                    transaction_type='CREDIT',
+                    amount=300,
+                    description='Welcome bonus coins for new caller'
+                )
+            elif wallet.balance == 50 and not wallet.transactions.exists():
+                wallet.balance = 300
+                wallet.save(update_fields=['balance'])
+                WalletTransaction.objects.create(
+                    wallet=wallet,
+                    transaction_type='CREDIT',
+                    amount=300,
+                    description='Welcome bonus coins for new caller'
+                )
 
         return Response({
             "success": True,
