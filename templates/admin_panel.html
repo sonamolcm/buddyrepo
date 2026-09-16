@@ -1029,7 +1029,7 @@
                 </td>
                 <td>
                   {% if u.is_listener or u.is_agent or u.role == 'AGENT' or u.role == 'LISTENER' or u.role == 'BUDDY' %}
-                  <span style="color: var(--text-muted);">-</span>
+                  {# Empty for Agent rows #}
                   {% elif u.wallet %}
                   <strong>🪙 {{ u.wallet.balance }}</strong>
                   {% else %}
@@ -2434,7 +2434,7 @@
                 roleBadge = '<span class="badge badge-primary">AGENT / LISTENER</span>';
               }
 
-              let coinsHtml = '<span style="color: var(--text-muted);">-</span>';
+              let coinsHtml = '';
               if (!isAgent) {
                 coinsHtml = `<strong>🪙 ${u.coins || 0}</strong>`;
               }
