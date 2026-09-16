@@ -982,7 +982,7 @@
             <thead>
               <tr>
                 <th>ID</th>
-                <th>Agent ID</th>
+                <th id="th-agent-id">Agent ID</th>
                 <th>Username / Phone</th>
                 <th>Role</th>
                 <th id="th-wallet-coins">Wallet Coins</th>
@@ -1057,11 +1057,10 @@
                   </td>
                 </tr>
                 {% else %}
-                {# CALLER / ADMIN ROW: FULL 9 COLUMNS INCLUDING WALLET COINS #}
+                {# CALLER / ADMIN ROW: STRICTLY 8 COLUMNS - NO AGENT ID TD #}
                 <tr id="user-row-{{ u.id }}" class="user-row caller-row" data-search="{{ u.username|lower }} {{ u.phone_number|default:''|lower }} {{ u.first_name|default:''|lower }} {{ u.caller_profile.name|default:''|lower }}" data-role="{{ u.role }}">
                   <td>#{{ u.id }}</td>
-                  <td style="color: var(--text-muted);">-</td>
-                  <td>
+                  <td class="caller-user-cell" colspan="2">
                     <strong>
                       {% if u.caller_profile and u.caller_profile.name %}
                         {{ u.caller_profile.name }}
@@ -1874,11 +1873,6 @@
             <label class="form-label">Language</label>
             <input type="text" id="edit-caller-language" class="form-input" placeholder="e.g. English, Hindi">
           </div>
-
-          <div class="form-group">
-            <label class="form-label">Interests (Comma-separated)</label>
-            <input type="text" id="edit-caller-interests" class="form-input" placeholder="e.g. Casual, Music, Movies">
-          </div>
         </div>
 
         <!-- AGENT FIELDS -->
@@ -1918,21 +1912,6 @@
           <div class="form-group">
             <label class="form-label">Bio / Profile Summary</label>
             <textarea id="edit-agent-bio" class="form-input" rows="3" placeholder="Brief introduction, counseling background..."></textarea>
-          </div>
-
-          <div class="grid-2" style="margin-top: 10px;">
-            <div class="form-group">
-              <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer;">
-                <input type="checkbox" id="edit-agent-available" style="width: 16px; height: 16px;">
-                <span>Available for incoming calls</span>
-              </label>
-            </div>
-            <div class="form-group">
-              <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer;">
-                <input type="checkbox" id="edit-agent-active" style="width: 16px; height: 16px;">
-                <span>Account Active (Not blocked)</span>
-              </label>
-            </div>
           </div>
         </div>
 
@@ -2421,25 +2400,30 @@
       const role = rInput ? rInput.value : '';
       const rows = document.querySelectorAll('#users-table tbody tr');
 
+      const thAgentId = document.getElementById('th-agent-id');
       const thCoins = document.getElementById('th-wallet-coins');
+
+      if (thAgentId) {
+        // In Callers filter: hide Agent ID column header completely
+        thAgentId.style.display = (role === 'CALLER') ? 'none' : '';
+      }
       if (thCoins) {
-        if (role === 'LISTENER') {
-          thCoins.style.display = 'none';
-        } else {
-          thCoins.style.display = '';
-        }
+        // In Listeners / Agents filter: hide Wallet Coins column header completely
+        thCoins.style.display = (role === 'LISTENER') ? 'none' : '';
       }
 
-      // Update role cell colspan for agent rows:
-      // When filtered to LISTENER, th-wallet-coins is hidden so agent-role-cell has colspan=1
-      // When viewing All Roles (mixed), th-wallet-coins is visible so agent-role-cell has colspan=2
+      // In Callers filter: th-agent-id is hidden, so caller-user-cell has colspan=1
+      // In All Roles (mixed view): th-agent-id is visible, so caller-user-cell has colspan=2
+      const callerUserCells = document.querySelectorAll('#users-table .caller-user-cell');
+      callerUserCells.forEach(cell => {
+        cell.setAttribute('colspan', (role === 'CALLER') ? '1' : '2');
+      });
+
+      // In Listeners filter: th-wallet-coins is hidden, so role-cell-agent has colspan=1
+      // In All Roles (mixed view): th-wallet-coins is visible, so role-cell-agent has colspan=2
       const agentRoleCells = document.querySelectorAll('#users-table .role-cell-agent');
       agentRoleCells.forEach(cell => {
-        if (role === 'LISTENER') {
-          cell.setAttribute('colspan', '1');
-        } else {
-          cell.setAttribute('colspan', '2');
-        }
+        cell.setAttribute('colspan', (role === 'LISTENER') ? '1' : '2');
       });
 
       rows.forEach(row => {
@@ -2498,8 +2482,6 @@
               catSelect.value = (d.profession && d.profession.name) ? d.profession.name : ((d.category && d.category.name) ? d.category.name : '');
             }
             document.getElementById('edit-agent-bio').value = d.bio || '';
-            document.getElementById('edit-agent-available').checked = Boolean(d.is_available);
-            document.getElementById('edit-agent-active').checked = Boolean(d.is_active);
             loading.style.display = 'none';
             form.style.display = 'block';
           } else {
@@ -2521,8 +2503,6 @@
             document.getElementById('edit-caller-age').value = d.age || '';
             document.getElementById('edit-caller-gender').value = d.gender || '';
             document.getElementById('edit-caller-language').value = d.language || '';
-            const interestsStr = Array.isArray(d.interests) ? d.interests.join(', ') : (d.interests || '');
-            document.getElementById('edit-caller-interests').value = interestsStr;
             loading.style.display = 'none';
             form.style.display = 'block';
           } else {
@@ -2555,9 +2535,7 @@
           gender: document.getElementById('edit-agent-gender').value,
           language: document.getElementById('edit-agent-language').value.trim(),
           profession: document.getElementById('edit-agent-category').value,
-          bio: document.getElementById('edit-agent-bio').value.trim(),
-          is_available: document.getElementById('edit-agent-available').checked,
-          is_active: document.getElementById('edit-agent-active').checked
+          bio: document.getElementById('edit-agent-bio').value.trim()
         };
       } else {
         const ageVal = document.getElementById('edit-caller-age').value.trim();
@@ -2566,8 +2544,7 @@
           phone_number: document.getElementById('edit-caller-phone').value.trim(),
           age: ageVal ? parseInt(ageVal, 10) : null,
           gender: document.getElementById('edit-caller-gender').value,
-          language: document.getElementById('edit-caller-language').value.trim(),
-          interests: document.getElementById('edit-caller-interests').value.trim()
+          language: document.getElementById('edit-caller-language').value.trim()
         };
       }
 
@@ -2876,8 +2853,7 @@
                 return `
                   <tr id="user-row-${u.id}" class="user-row caller-row" data-search="${searchAttr}" data-role="${u.role}">
                     <td>#${u.id}</td>
-                    <td style="color: var(--text-muted);">-</td>
-                    <td>
+                    <td class="caller-user-cell" colspan="2">
                       <strong>${displayName}</strong>
                       ${phoneHtml}
                     </td>
