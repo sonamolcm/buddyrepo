@@ -3,6 +3,7 @@
 import os
 import json
 import logging
+from datetime import datetime
 from django.conf import settings
 
 logger = logging.getLogger(__name__)
@@ -92,7 +93,11 @@ def send_incoming_call_fcm(
         "channel_name": "<call.channel_name>",
         "caller_id": "<caller.id>",
         "caller_name": "<caller name>",
-        "call_type": "audio"
+        "call_type": "audio",
+        "message": "PING_DEVICE",
+        "time": "<formatted timestamp DD/MM/YYYY HH:MM:SS>",
+        "pushguid": "<call.id>",
+        "delay_while_idle": "false"
     }
 
     Returns:
@@ -114,6 +119,8 @@ def send_incoming_call_fcm(
         logger.warning("firebase_admin.messaging is not available.")
         return False, "messaging module unavailable"
 
+    current_time_str = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+
     data_payload = {
         "type": "incoming_call",
         "call_id": str(call_id),
@@ -121,6 +128,10 @@ def send_incoming_call_fcm(
         "caller_id": str(caller_id),
         "caller_name": str(caller_name or "Caller"),
         "call_type": "audio",
+        "message": "PING_DEVICE",
+        "time": current_time_str,
+        "pushguid": str(call_id),
+        "delay_while_idle": "false",
     }
 
     try:
@@ -129,6 +140,7 @@ def send_incoming_call_fcm(
             token=token,
             android=messaging.AndroidConfig(
                 priority="high",
+                ttl=300000,
                 data=data_payload,
             ),
         )
