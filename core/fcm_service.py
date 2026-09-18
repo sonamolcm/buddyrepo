@@ -181,3 +181,4 @@ def check_firebase_status() -> dict:
         "message": "Firebase Admin SDK initialized successfully."
     }
 
+#
